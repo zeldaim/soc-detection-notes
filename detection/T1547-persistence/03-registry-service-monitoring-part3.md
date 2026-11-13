@@ -22,6 +22,8 @@ Step 1 — 재부팅 후 기본 상태 확인 (가설 검증)
 Get-Service -Name "Sysmon64", "WazuhSvc" | Select-Object Name, Status, StartType
 ```
 
+> 📷 Windows 재부팅 후 `Get-Service Sysmon64, WazuhSvc`: 둘 다 Running / Automatic.
+
 Sysmon이 먼저 뜨고 Wazuh agent가 나중에 뜨는지 확인. 순서가 바뀌면 eventchannel 구독 타이밍 이슈 발생 가능.
 
 Step 2 — EventID 13 archives 도달 여부 재확인
@@ -32,6 +34,8 @@ Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" 
 # 새 키 이름으로 테스트
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday4" -Value "calc.exe" -PropertyType String -Force
 ```
+
+> 📷 이전 테스트 값(EvilToday3)을 지우고 새 이름 EvilToday4(calc.exe)로 HKCU Run 키 생성 — 같은 값을 재설정하면 이벤트가 안 나는 문제를 피하려는 것.
 
 Rocky
 ```bash
@@ -44,6 +48,8 @@ Step 3 — archives에 도달했는데 rule 미발동이면
 # 실제 필드명 재확인 (decoder 출력이 image인지 win.eventdata.image인지)
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday4" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool | grep -E "image|targetObject|decoder|rule"
 ```
+
+> 📷 매니저 archives.json에서 EvilToday4 검색 → 없음(json.tool "Expecting value").
 
 Expecting value: line 1 column 1 (char 0) — archives.json에 EvilToday4가 없다는 뜻.
 
@@ -65,10 +71,14 @@ EventID 13이 보이면 Sysmon은 정상인 것이지만 확인 결과 아무 �
 Get-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" | Select-Object EvilToday4
 ```
 
+> 📷 Windows에서 Sysmon 로그의 EventID 13을 조회해도 결과 없음. 레지스트리에는 EvilToday4 = calc.exe가 실제로 존재 — 키는 생겼는데 Sysmon이 기록하지 않음.
+
 Step 2 — Agent가 살아있는지 확인
 ```bash
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
 ```
+
+> 📷 `agent_control -l`: 003 DESKTOP-…(Windows) Active — 에이전트 연결은 정상.
 
 DESKTOP-5408CBA (ID: 003) Active 확인. agent 연결은 정상.
 
@@ -87,6 +97,8 @@ Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 10 | Whe
 
 ```
 
+> 📷 EvilToday4·5 삭제 후 EvilToday6 생성, 3초 뒤 Sysmon EventID 13 조회 → 여전히 출력 없음.
+
 Get-WinEvent 결과가 빈 출력. EventID 13이 Sysmon에 캡처 안 되고 있음.
 
 키 생성(EvilToday6 : calc.exe)은 성공했는데 Sysmon이 못 잡은 것 → Sysmon config 문제.
@@ -94,6 +106,8 @@ Get-WinEvent 결과가 빈 출력. EventID 13이 Sysmon에 캡처 안 되고 있
 # Sysmon 현재 config 확인
 C:\Windows\sysmon64.exe -c
 ```
+
+> 📷 `sysmon64.exe -c`로 현재 설정 확인: Sysmon v15.20, 설정 파일 sysmon_persistence.xml. RegistryEvent include 규칙 T1547_Run_Key_Create / T1547_Run_Key_Set(…\CurrentVersion\Run, RunOnce, WOW6432Node\…\Run), T1547_Startup_Registry(Winlogon, BootExecute, Shell Folders), FileCreate T1547_Startup_Folder_LNK(Startup 폴더 .lnk). exclude 규칙으로 svchost·services·regedit·MsMpEng·msiexec 제외.
 
 Sysmon config는 정상. T1547_Run_Key_Set이 SOFTWARE\Microsoft\Windows\CurrentVersion\Run을 감시 중.
 
@@ -124,12 +138,16 @@ Start-Sleep -Seconds 3
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 10 | Where-Object {$_.Id -eq 13}
 ```
 
+> 📷 `[Environment]::Is64BitProcess` = True 확인 후 64비트 powershell.exe로 EvilToday7 생성 → 3초 뒤 Sysmon에 **EventID 13 "Registry value set" 3건 기록(4/26 18:04)** — Sysmon 쪽 캡처 성공.
+
 Sysmon EventID 13 캡처 확인됨. 3개 이벤트 2026-04-26 오후 6:04:24~25.
 
 파이프라인 1단계 통과. 이제 Rocky에서 archives 도달 여부 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday7" /var/ossec/logs/archives/archives.json | tail -3
 ```
+
+> 📷 매니저 archives.json에서 EvilToday7 → 없음. Sysmon에는 찍혔는데 매니저 archives에는 안 들어옴.
 
 archives에 없음. Sysmon은 잡았는데 agent가 manager로 전송 못 하고 있음.
 
@@ -161,6 +179,8 @@ Start-Sleep -Seconds 5
 # Sysmon 캡처 확인
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 5 | Where-Object {$_.Id -eq 13} | Select-Object TimeCreated
 ```
+
+> 📷 EvilToday7 삭제 → EvilToday8 생성, 5초 뒤 Sysmon EventID 13 1건(18:08:45) 확인.
 
 EvilToday7, 8 모두 archives에 없음. agent → manager 전송 자체가 안 되고 있음.
 
@@ -215,9 +235,13 @@ Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" 
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday9" -Value "calc.exe" -PropertyType String -Force
 
 ```
+
+> 📷 `Restart-Service WazuhSvc`로 에이전트 재시작 후 10초 대기, EvilToday9 생성.
 ```bash
 docker exec single-node-wazuh.manager-1 bash -c 'grep -a "003" /var/ossec/logs/archives/archives.json | tail -1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[\"timestamp\"])"'
 ```
+
+> 📷 archives.json에서 에이전트 003의 마지막 이벤트 시각 → 2026-04-24T17:09:32 — 이틀 전에서 멈춰 있음.
 
 타임스탬프 여전히 2026-04-24T17:09 — agent restart 후에도 오늘 이벤트가 전혀 안 오고 있음.
 
@@ -226,6 +250,8 @@ archives.json 파일 자체가 오늘 날짜 파일인지 확인:
 # archives.json이 오늘 파일인지, 아니면 날짜별 파일이 따로 있는지
 docker exec single-node-wazuh.manager-1 ls -la /var/ossec/logs/archives/
 ```
+
+> 📷 `/var/ossec/logs/archives/`: archives.json 719,273바이트, 마지막 수정 **4/24 17:09**, archives.log 0바이트 — 4/24 이후 archives 기록이 중단됨.
 ```bash
 archives.json   Apr 24 17:09   719273 bytes  ← 이틀 전에 멈춤
 archives.log    Apr 26 08:44   0 bytes       ← 오늘 파일인데 비어있음
@@ -241,6 +267,8 @@ logall_json이 꺼져 있어서 archives.json에 새 이벤트가 안 쌓이고 
 docker inspect single-node-wazuh.manager-1 --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}' | grep ossec.conf
 ```
 
+> 📷 `docker inspect` 마운트: 호스트 `wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf` → 컨테이너 `/wazuh-config-mount/etc/ossec.conf` — 매니저 설정은 이 호스트 파일이 원본.
+
 호스트 경로 확인됨.
 ```bash
 /home/yhc/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf
@@ -249,6 +277,8 @@ docker inspect single-node-wazuh.manager-1 --format '{{range .Mounts}}{{.Source}
 # logall 현재 값 확인
 grep -n "logall" /home/yhc/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf
 ```
+
+> 📷 원본 wazuh_manager.conf 5~6줄: `logall no`, `logall_json no` — 컨테이너 안에서 바꾼 yes 설정이 재생성 때 원본(no)으로 되돌아간 것이 원인.
 ```bash
 # 수정
 sed -i 's/<logall>no<\/logall>/<logall>yes<\/logall>/' /home/yhc/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf
@@ -258,10 +288,14 @@ sed -i 's/<logall_json>no<\/logall_json>/<logall_json>yes<\/logall_json>/' /home
 grep -n "logall" /home/yhc/wazuh-docker/single-node/config/wazuh_cluster/wazuh_manager.conf
 ```
 
+> 📷 호스트 원본 파일에서 sed로 logall·logall_json을 yes로 수정하고 grep으로 확인.
+
 수정 확인 후 manager restart:
 ```bash
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
+
+> 📷 logall 설정을 원본 파일에서 yes로 바꾼 뒤 매니저 재시작(40초 대기).
 
 logall_json>yes 확인, manager restart 완료.
 
@@ -271,10 +305,14 @@ logall_json>yes 확인, manager restart 완료.
 Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday9" -ErrorAction SilentlyContinue
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday10" -Value "calc.exe" -PropertyType String -Force
 ```
+
+> 📷 EvilToday9 삭제 → EvilToday10(calc.exe) 생성.
 ```bash
 docker exec single-node-wazuh.manager-1 ls -la /var/ossec/logs/archives/
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday10" /var/ossec/logs/archives/archives.json | tail -3
 ```
+
+> 📷 archives 디렉터리 갱신(archives.json·archives.log 4/26 09:23) 확인, archives.json에 **EvilToday10 Sysmon EventID 13 이벤트 수신** — agent 003, decoder windows_eventchannel, RuleName T1547_Run_Key_Create, Image powershell.exe, TargetObject …\CurrentVersion\Run\EvilToday10, location EventChannel.
 
 파이프라인 통과.
 ```bash
@@ -294,6 +332,8 @@ archives는 도달했는데 alerts는 없음. rule 매칭 실패.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday10" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool | grep -E '"image"|"targetObject"|"ruleName"|"decoder"'
 ```
+
+> 📷 json.tool로 필드 확인: decoder 아래 `ruleName`, `image`, `targetObject`가 존재(실제 필드 경로는 win.eventdata.*).
 
 필드 구조 확인됨:
 ```bash
@@ -316,6 +356,8 @@ docker exec single-node-wazuh.manager-1 grep -n "100220" /var/ossec/ruleset/rule
 docker exec single-node-wazuh.manager-1 grep -n "100220" /var/ossec/etc/rules/local_rules.xml
 ```
 
+> 📷 룰 ID 100220이 두 곳에 있음: 기본 룰셋 `0860-sysmon_id_13.xml` 31번째 줄과 `local_rules.xml` 2번째 줄 — ID 중복.
+
 rule 100220이 두 군데 다 있음 — 이게 충돌 원인일 수 있음. 근데 그것보다 먼저 각 파일의 실제 내용 확인:
 ```bash
 # 0860 파일의 100220 룰 전체 확인
@@ -326,6 +368,8 @@ docker exec single-node-wazuh.manager-1 sed -n '28,45p' /var/ossec/ruleset/rules
 # local_rules.xml 전체 확인
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 0860-sysmon_id_13.xml의 100220: if_sid 92300, `image (?i)powershell`, `targetObject (?i)CurrentVersion\Run`, T1547.001(필드 이름에 win.eventdata 접두어 없음). 같은 파일의 92302는 `win.eventdata.image reg\.exe`. local_rules.xml의 100220은 `if_group sysmon_event_13` + `win.eventdata.targetObject`.
 
 문제 두 개 발견됨.
 
@@ -368,6 +412,8 @@ docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/l
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
 
+> 📷 충돌을 없애려고 local_rules.xml에서 100220을 지워 빈 group만 남기고 소유자 변경 후 매니저 재시작.
+
 manager restart 완료. 이제 테스트:
 ```bash
 # Windows
@@ -377,6 +423,10 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday11" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 EvilToday10 삭제 → EvilToday11 생성.
+
+> 📷 alerts.json에서 EvilToday11 → 없음(중복 ID를 지워도 알림 미생성).
 
 alerts에 여전히 없음. archives는 도달하는데 rule 매칭이 안 되는 것.
 
@@ -389,6 +439,8 @@ docker exec single-node-wazuh.manager-1 grep -a "EvilToday11" /var/ossec/logs/ar
 # 92300 rule 존재 확인
 docker exec single-node-wazuh.manager-1 grep -rn "92300" /var/ossec/ruleset/rules/
 ```
+
+> 📷 `grep -rn 92300`: 0860-sysmon_id_13.xml에 Sysmon Event 13 룰 범위 92300~92399, 92300은 level 0, 92301 이후 룰들이 if_sid 92300으로 체이닝.
 
 0860-sysmon_id_13.xml:11:  <rule id="92300" level="0">
 
@@ -424,15 +476,21 @@ docker exec single-node-wazuh.manager-1 sed -n '8,25p' /var/ossec/ruleset/rules/
 
 overwrite 전에 92300의 if_sid 값 확인하고 그대로 써야 함.
 
+> 📷 0860-sysmon_id_13.xml 8~25줄: group sysmon_eid13_detections. **92300(level 0)**: `if_group sysmon_event_13` + targetObject가 `SOFTWARE\(WOW6432NODE\)MICROSOFT\WINDOWS(NT)\CURRENTVERSION\(RUN|…)` 정규식, "Added registry content to be executed on next logon", T1547.001. 92301(level 12): details가 .lnk/.vbs/.vba인 경우.
+
 local_rules.xml에 뭐가 들어있는지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 ```
 
+> 📷 local_rules.xml에 92300을 `level 3 overwrite=yes`, `if_sid 61600` + eventID ^13$로 덮어쓴 버전("92300 suppress 해제").
+
 0860 파일의 100220 룰 현재 상태:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -A8 'id="100220"' /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
+
+> 📷 기본 룰셋의 100220 다시 확인: if_sid 92300, image/targetObject 필드(접두어 없음), "T1547 - Run key modified via PowerShell", level 12.
 
 현재 상태 정리:
 
@@ -464,16 +522,24 @@ docker restart single-node-wazuh.manager-1 && sleep 40
 ```
 
 이렇게 하면 92300이 level 3으로 살아있고, 100220이 if_sid>92300으로 체이닝 가능.
+
+> 📷 local_rules.xml을 다시 작성: 92300을 `level 3 overwrite=yes`, 원래와 같은 `if_group sysmon_event_13` + `win.eventdata.targetObject (?i)CurrentVersion.Run`, T1547.001로 덮어써 92300이 살아 있게 하고 100220이 그 아래로 체이닝되도록 함. 이후 소유자 변경·매니저 재시작.
 ```bash
 # Windows
 Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday11" -ErrorAction SilentlyContinue
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday12" -Value "calc.exe" -PropertyType String -Force
 ```
+
+> 📷 EvilToday11 삭제 → EvilToday12 생성.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday12" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
 
+> 📷 alerts.json에서 EvilToday12 → 여전히 없음.
+
 여전히 없음. archives에는 도달하는지 먼저 확인:
+
+> 📷 archives.json에는 EvilToday12 이벤트가 정상 도착(agent 003, Sysmon EventID 13, T1547_Run_Key_Create, decoder windows_eventchannel, location EventChannel) — 수집 경로는 문제없고 룰 단계에서 막힘.
 
 archives에는 EvilToday12 도달 확인. eventID 13, powershell, CurrentVersion\Run 다 있음.
 
@@ -486,6 +552,8 @@ print(d.get('full_log', d.get('data', '')))
 "
 ```
 
+> 📷 python으로 archives 레코드의 full_log만 뽑아 logtest에 넣을 원본 JSON(win.system / win.eventdata)을 확보.
+
 full_log 내용 추출해서 logtest에 넣어야 하는데, 더 빠른 방법:
 ```bash
 # analysisd 디버그 로그에서 rule 매칭 과정 확인
@@ -495,9 +563,13 @@ docker exec single-node-wazuh.manager-1 grep -a "92300\|100220" /var/ossec/logs/
 # 또는 wazuh-logtest 인터랙티브 모드
 docker exec -it single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest
 ```
+
+> 📷 매니저 컨테이너에서 `wazuh-logtest` 대화형 모드 실행.
 ```bash
 {"win":{"system":{"providerName":"Microsoft-Windows-Sysmon","providerGuid":"{5770385f-c22a-43e0-bf4c-06f5698ffbd9}","eventID":"13","version":"2","level":"4","task":"13","opcode":"0","keywords":"0x8000000000000000","systemTime":"2026-04-26T09:43:45.3303179Z","eventRecordID":"22401","processID":"2776","threadID":"4020","channel":"Microsoft-Windows-Sysmon/Operational","computer":"DESKTOP-5408CBA","severityValue":"INFORMATION","messag
 ```
+
+> 📷 logtest 결과: **`WARNING (1103): Could not open file 'ruleset/rules/0860-sysmon_id_13.xml' due to Permission denied`**, `(7613) Rule ID '92300' does not exist but overwrite is set` — 앞서 docker cp로 덮어쓴 0860 파일 권한 때문에 Sysmon 13 룰 파일 자체가 로드되지 않고 있었음. 디코더는 json으로 처리.
 
 두 개의 핵심 경고 발견:
 ```bash
@@ -521,14 +593,20 @@ docker exec single-node-wazuh.manager-1 ls -la /var/ossec/ruleset/rules/0860-sys
 # manager restart
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
+
+> 📷 0860-sysmon_id_13.xml의 소유자를 wazuh:wazuh, 권한 660으로 맞추고(`-rw-rw----` 4551바이트) 매니저 재시작.
 ```bash
 # Windows
 Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday12" -ErrorAction SilentlyContinue
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday13" -Value "calc.exe" -PropertyType String -Force
 ```
+
+> 📷 EvilToday12 삭제 → EvilToday13 생성.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday13" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 EvilToday13 → 아직 없음.
 
 여전히 없음. logtest로 다시 확인, 이번엔 경고 메시지가 바뀌었는지 봐야 함:
 ```bash
@@ -537,6 +615,8 @@ docker exec -it single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest
 ```bash
 {"win":{"system":{"providerName":"Microsoft-Windows-Sysmon","eventID":"13","channel":"Microsoft-Windows-Sysmon/Operational","computer":"DESKTOP-5408CBA","severityValue":"INFORMATION"},"eventdata":{"ruleName":"T1547_Run_Key_Create","eventType":"SetValue","image":"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe","targetObject":"HKU\\\\S-1-5-21-3385978295-689239366-777767380-1001\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run\\\\EvilToday13","details":"calc.exe"}}}
 ```
+
+> 📷 logtest 재실행: 권한 경고는 사라지고 `(7605) It is not possible to overwrite 'if_group' value in rule '92300'. The original value is retained` 경고만 남음. 디코딩 결과 win.eventdata.targetObject(…\CurrentVersion\Run\EvilToday13), image(powershell.exe), ruleName T1547_Run_Key_Create, eventID 13, severityValue INFORMATION 등 필드 정상 추출.
 
 새로운 핵심 경고:
 ```bash
@@ -573,6 +653,8 @@ docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/ruleset/rul
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
 
+> 📷 0860 파일을 꺼내 100220의 필드 이름을 `image`→`win.eventdata.image`, `targetObject`→`win.eventdata.targetObject`로 sed 수정, 다시 넣고 소유자 변경·재시작(4.58kB).
+
 100220 룰 필드명 수정 확인:
 ```bash
 <field name="win.eventdata.image" ...>(?i)powershell</field>
@@ -586,15 +668,23 @@ Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" 
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday14" -Value "calc.exe" -PropertyType String -Force
 ```
 
+> 📷 EvilToday13 삭제 → EvilToday14 생성.
+
+> 📷 필드 확인용으로 XML 조각을 셸에 그대로 붙여넣어 bash 문법 오류. alerts.json에서 EvilToday14 → 없음.
+
 먼저 manager 상태 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/wazuh-control status
 ```
 
+> 📷 `wazuh-control status`: 핵심 데몬 정상 실행 중.
+
 그리고 logtest로 경고 메시지 바뀌었는지 확인:
 ```bash
 docker exec -it single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest
 ```
+
+> 📷 wazuh-logtest 대화형 모드 다시 실행.
 
 manager 정상 실행 중. logtest 준비됨.
 
@@ -602,6 +692,8 @@ manager 정상 실행 중. logtest 준비됨.
 ```bash
 {"win":{"system":{"providerName":"Microsoft-Windows-Sysmon","eventID":"13","channel":"Microsoft-Windows-Sysmon/Operational","computer":"DESKTOP-5408CBA","severityValue":"INFORMATION"},"eventdata":{"ruleName":"T1547_Run_Key_Create","eventType":"SetValue","image":"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe","targetObject":"HKU\\\\S-1-5-21-3385978295-689239366-777767380-1001\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run\\\\EvilToday14","details":"calc.exe"}}}
 ```
+
+> 📷 EvilToday14 이벤트를 logtest에 입력: 92300 if_group 덮어쓰기 불가 경고(7605)만 있고 Phase 2 디코딩까지만 진행 — Phase 3(룰 매칭) 결과가 나오지 않음.
 
 Phase 2 디코딩은 정상.
 
@@ -624,6 +716,8 @@ print(d['full_log'])
 "
 ```
 
+> 📷 logtest 종료 후 archives.json에서 EvilToday14 레코드의 full_log(실제 수신 원문, eventRecordID 22652) 추출.
+
 full_log 확인됨. 이걸 logtest에 넣어야 함:
 ```bash
 docker exec -it single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest
@@ -631,6 +725,8 @@ docker exec -it single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest
 ```bash
 {"win":{"system":{"providerName":"Microsoft-Windows-Sysmon","providerGuid":"{5770385f-c22a-43e0-bf4c-06f5698ffbd9}","eventID":"13","version":"2","level":"4","task":"13","opcode":"0","keywords":"0x8000000000000000","systemTime":"2026-04-26T09:57:36.0497793Z","eventRecordID":"22652","processID":"2776","threadID":"4020","channel":"Microsoft-Windows-Sysmon/Operational","computer":"DESKTOP-5408CBA","severityValue":"INFORMATION","message":"\"Registry value set:\r\nRuleName: T1547_Run_Key_Create\r\nEventType: SetValue\r\nUtcTime: 2026-04-26 09:57:36.045\r\nProcessGuid: {4fb3ada3-d0f1-69ed-3c01-000000000600}\r\nProcessId: 3672\r\nImage: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\r\nTargetObject: HKU\\S-1-5-21-3385978295-689239366-777767380-1001\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run\\EvilToday14\r\nDetails: calc.exe\r\nUser: DESKTOP-5408CBA\\yhc\""},"eventdata":{"ruleName":"T1547_Run_Key_Create","eventType":"SetValue","utcTime":"2026-04-26 09:57:36.045","processGuid":"{4fb3ada3-d0f1-69ed-3c01-000000000600}","processId":"3672","image":"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe","targetObject":"HKU\\\\S-1-5-21-3385978295-689239366-777767380-1001\\\\SOFTWARE\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run\\\\EvilToday14","details":"calc.exe","user":"DESKTOP-5408CBA\\\\yhc"}}}
 ```
+
+> 📷 실제 full_log 전체(providerGuid, message 포함)를 logtest에 그대로 입력해 재검증.
 
 결과
 ```bash
@@ -689,6 +785,8 @@ Phase 3 없음. 디코딩은 완벽한데 rule 매칭이 전혀 안 됨.
 docker exec single-node-wazuh.manager-1 grep -a '"agent":{"id":"003"' /var/ossec/logs/alerts/alerts.json | tail -5 | python3 -m json.tool | grep -E '"id"|"level"|"description"'
 ```
 
+> 📷 alerts.json에서 에이전트 003의 최근 알림을 json.tool로 보려다 "Extra data" 오류(여러 줄 JSON을 한 번에 넣은 탓).
+
 그리고 archives에서 EvilToday14가 어느 rule로 처리됐는지:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday14" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool | grep -E '"rule"|"decoder"'
@@ -701,14 +799,20 @@ archives에는 rule 정보가 없을 수 있음. 결국 실제 alert이 안 나�
 docker exec single-node-wazuh.manager-1 head -30 /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
 
+> 📷 0860-sysmon_id_13.xml 머리 부분: Wazuh 저작권 주석, Sysmon Event 13 룰 ID 92300~92399, 92300(level 0, if_group sysmon_event_13, Run/RunOnce 경로 정규식)과 92301(level 12, details 확장자 lnk/vbs/vba).
+
 그리고 archives에서 EvilToday14가 어느 rule로 처리됐는지:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday14" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool | grep -E '"rule"|"decoder"'
 ```
 
+> 📷 archives.json의 EvilToday14 레코드에서 "rule"/"decoder" 키를 찾으면 decoder만 있고 rule 키가 없음 — 어떤 룰에도 매칭되지 않은 이벤트.
+
 archives에는 rule 정보가 없을 수 있음. 결국 실제 alert이 안 나오는 이유는 92300 자체가 이 이벤트를 안 잡는 것.
 
 92300의 실제 parent chain 확인:
+
+> 📷 92300의 실제 부모 체인 확인을 위해 0860 파일 머리를 다시 출력(92300은 if_group sysmon_event_13에 의존).
 
 이제 전체 그림이 보임.
 
@@ -717,11 +821,15 @@ archives에는 rule 정보가 없을 수 있음. 결국 실제 alert이 안 나�
 docker exec single-node-wazuh.manager-1 grep -rn "sysmon_event_13" /var/ossec/ruleset/rules/ | grep -v "0860"
 ```
 
+> 📷 `sysmon_event_13` 그룹을 정의하는 곳: 0330-sysmon_rules.xml 98번째 줄, 0595-win-sysmon_rules.xml 139번째 줄.
+
 두 파일에서 sysmon_event_13 그룹을 부여하고 있음. 어느 rule인지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 sed -n '90,105p' /var/ossec/ruleset/rules/0330-sysmon_rules.xml
 docker exec single-node-wazuh.manager-1 sed -n '130,145p' /var/ossec/ruleset/rules/0595-win-sysmon_rules.xml
 ```
+
+> 📷 두 정의 비교: 0330의 185011은 if_sid 18101 + `match Microsoft-Windows-Sysmon/Operational: INFORMATION(13)`(구형 eventlog 형식용). 0595의 **61615**는 if_sid 61600 + `win.system.eventID ^13$`, "Sysmon - Event 13: RegistryEvent …"로 sysmon_event_13 그룹을 붙임 — eventchannel 형식은 61600→61615→92300 경로.
 
 0330 파일: rule 185011 (level 0) — sysmon_event_13 그룹 부여
 
@@ -746,6 +854,8 @@ docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/ruleset/rul
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
 
+> 📷 0860 파일에서 92300을 level 0 → **level 3**으로 바꿔(기본 룰 직접 수정) 컨테이너에 넣고 재시작.
+
 그리고 local_rules.xml의 92300 overwrite는 삭제 (충돌 방지):
 ```bash
 docker exec single-node-wazuh.manager-1 bash -c 'cat > /var/ossec/etc/rules/local_rules.xml << EOF
@@ -754,6 +864,8 @@ docker exec single-node-wazuh.manager-1 bash -c 'cat > /var/ossec/etc/rules/loca
 EOF'
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 local_rules.xml은 빈 group만 남기도록 다시 작성하고 소유자 변경 — 기본 룰과 충돌하는 덮어쓰기 제거.
 
 확인:
 
@@ -765,14 +877,20 @@ docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/l
 Remove-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday14" -ErrorAction SilentlyContinue
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "EvilToday15" -Value "calc.exe" -PropertyType String -Force
 ```
+
+> 📷 EvilToday14 재생성 후 다시 삭제하고 EvilToday15(calc.exe) 생성.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday15" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 EvilToday15 → 없음.
 
 여전히 없음. archives에는 도달했는지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday15" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool | grep -E '"eventID"|"decoder"|"ruleName"'
 ```
+
+> 📷 archives.json의 EvilToday15: decoder 아래 eventID 13, ruleName T1547_Run_Key_Create는 있음.
 
 archives 도달 확인. eventID 13, T1547_Run_Key_Create. 근데 alerts 없음.
 
@@ -788,12 +906,16 @@ docker exec single-node-wazuh.manager-1 grep -a "EvilToday15" /var/ossec/logs/ar
 docker exec single-node-wazuh.manager-1 grep -a '"id":"92300"' /var/ossec/logs/alerts/alerts.json | tail -3
 ```
 
+> 📷 archives 레코드의 agent name DESKTOP-…, manager wazuh.manager, decoder windows_eventchannel. alerts.json에서 92300 검색 → 0건.
+
 decoder는 windows_eventchannel 정상. 근데 92300 alert도 없음.
 
 즉 92300이 level 3으로 수정됐는데도 alert가 안 나옴 — 0860 파일 수정이 실제로 컨테이너에 반영됐는지 재확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep 'id="92300"' /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
+
+> 📷 컨테이너의 0860 파일에서 92300이 `level="3"`으로 반영된 것 확인 — 그래도 알림 없음.
 
 파일에는 level="3" 맞음. 근데 alert가 없다는 건 92300이 이 이벤트를 아예 안 잡고 있는 것.
 
@@ -811,10 +933,14 @@ sysmon_event_13 그룹을 부여하는 rule이 185011 또는 61615인데, 이것
 docker exec single-node-wazuh.manager-1 grep -a '"id":"003"' /var/ossec/logs/alerts/alerts.json | tail -1 | python3 -m json.tool | grep -E '"rule"|"id"|"level"|"description"'
 ```
 
+> 📷 alerts.json에서 에이전트 003의 마지막 알림은 60106 "Windows Logon Success"(level 3) — Security 채널 이벤트는 알림이 나옴.
+
 003 agent에서 오는 alert가 있는지, 있다면 어느 rule인지 확인. alerts.json 자체가 비어있는 건지도 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 wc -l /var/ossec/logs/alerts/alerts.json
 ```
+
+> 📷 `wc -l alerts.json` → 307줄.
 
 alerts.json에 307줄 있고 003 agent alert도 있음 (rule 60106 Windows Logon Success). alert 파이프라인 자체는 동작 중.
 
@@ -829,6 +955,8 @@ docker exec single-node-wazuh.manager-1 grep -a '"id":"185011"\|"id":"61615"' /v
 # archives에서 EvilToday15가 어떤 rule로 처리됐는지 — rule 섹션 확인
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday15" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool | grep -A5 '"rule"'
 ```
+
+> 📷 alerts.json에서 185011·61615 → 0건, archives의 EvilToday15 레코드에 "rule" 섹션 없음 — Sysmon 13 이벤트가 61600 이하 체인에 전혀 들어가지 않음.
 
 archives에 rule 섹션이 아예 없음. Wazuh는 archives.json에 rule 정보를 포함하지 않음 (alerts.json에만 있음).
 
@@ -1001,14 +1129,24 @@ docker cp ~/0860-sysmon_id_13.xml single-node-wazuh.manager-1:/var/ossec/ruleset
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
+
+> 📷 vi로 0860 파일을 직접 편집해 컨테이너에 다시 넣고(4.45kB) 소유자 변경·재시작.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -A3 'id="92300"' /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
+
+> 📷 수정된 92300: level 3, if_group sysmon_event_13, targetObject 정규식을 단순하게 `(?i)SOFTWARE\Microsoft\Windows\CurrentVersion\Run`으로 변경.
+
+> 📷 EvilToday15 삭제 → EvilToday16 생성.
+
+> 📷 alerts.json에서 EvilToday16 → 없음.
 
 archives에 도달했는지 먼저:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday16" /var/ossec/logs/archives/archives.json | tail -1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['timestamp'])"
 ```
+
+> 📷 archives.json에서도 EvilToday16을 찾지 못해 json.load가 "Expecting value" 오류 — 이번엔 매니저까지 오지도 않음.
 
 EvilToday16이 archives에도 없음. Windows에서 키 생성이 안 됐거나 agent 전송이 또 끊긴 것.
 
@@ -1021,6 +1159,8 @@ Get-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" | Select-
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 5 | Where-Object {$_.Id -eq 13} | Select-Object TimeCreated
 ```
 
+> 📷 Windows: 레지스트리에 EvilToday16 = calc.exe는 존재하지만 Sysmon EventID 13 조회 결과가 비어 있음.
+
 EvilToday16 키는 있는데 Sysmon EventID 13이 없음. 기존 키에 동일 값 재설정이라 Sysmon이 캡처 안 한 것 — EvilToday16이 이미 있었던 것.
 ```bash
 # 삭제 후 재생성
@@ -1031,10 +1171,14 @@ Start-Sleep -Seconds 3
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 5 | Where-Object {$_.Id -eq 13} | Select-Object TimeCreated
 ```
 
+> 📷 EvilToday16 삭제 → 2초 대기 → EvilToday17 생성, 3초 뒤 Sysmon EventID 13 1건(19:35:10) 기록.
+
 Sysmon EventID 13 캡처 확인 2026-04-26 오후 7:35:10. Rocky에서:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday17" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 EvilToday17 → 두 번 조회해도 없음.
 
 계속 안 됨. 근본적으로 다른 접근이 필요함.
 
@@ -1046,10 +1190,14 @@ docker exec single-node-wazuh.manager-1 grep -n "185011\|61615" /var/ossec/rules
 docker exec single-node-wazuh.manager-1 grep -n "185011\|61615" /var/ossec/ruleset/rules/0595-win-sysmon_rules.xml | head -5
 ```
 
+> 📷 185011은 0330-sysmon_rules.xml 94줄, 61615는 0595-win-sysmon_rules.xml 134줄에 정의(둘 다 level 0).
+
 그리고 이 rule들의 parent인 18101/61600 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -n '"18101"\|"61600"' /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 부모 룰 18101·61600 검색 → 0건(level 0 룰은 원래 알림을 남기지 않아 이 방법으로는 확인 불가).
 
 모두 level 0이라 alerts에 없는 건 당연함. 체인 자체가 동작하는지 확인하려면 다른 방법 필요.
 
@@ -1076,6 +1224,8 @@ if_group 대신 if_sid>61600 (Sysmon 기본 부모 rule) + eventID 13 직접 필
 docker exec single-node-wazuh.manager-1 grep -n 'id="61600"' /var/ossec/ruleset/rules/0595-win-sysmon_rules.xml | head -3
 ```
 
+> 📷 61600은 0595-win-sysmon_rules.xml 15줄에 level 0으로 정의.
+
 61600도 level 0. 그리고 파일 저장 및 cp 완료된 것 같음.
 
 수정 내용 확인 후 restart:
@@ -1085,6 +1235,8 @@ docker cp ~/0860-sysmon_id_13.xml single-node-wazuh.manager-1:/var/ossec/ruleset
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
+
+> 📷 컨테이너의 92300: level 3, if_group sysmon_event_13, 단순화한 Run 경로 정규식 — 수정본(4.47kB) 재배포 후 재시작.
 
 92300이 아직 <if_group>sysmon_event_13</if_group> 그대로임. vi 수정이 저장 안 된 것 — swap 파일 때문에 이전 버전이 cp된 것.
 
@@ -1102,6 +1254,8 @@ sed -i 's|<if_group>sysmon_event_13</if_group>|<if_sid>61600</if_sid>\n        <
 # 확인
 grep -A5 'id="92300"' ~/0860-sysmon_id_13.xml
 ```
+
+> 📷 sed로 92300의 `if_group sysmon_event_13`을 **`if_sid 61600` + `win.system.eventID ^13$`** 두 줄로 교체(61615 단계를 건너뛰고 61600에 직접 연결), 설명 "T1547.001 - Registry Run key modified".
 ```bash
 <rule id="92300" level="3">
   <if_sid>61600</if_sid>
@@ -1115,6 +1269,10 @@ docker cp ~/0860-sysmon_id_13.xml single-node-wazuh.manager-1:/var/ossec/ruleset
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
+
+> 📷 수정본(4.57kB) 컨테이너 반영, 소유자 변경, 재시작.
+
+> 📷 alerts.json에서 EvilToday18 → 두 번 조회해도 없음.
 
 정리하면: 지금까지 문제는 rule 체인이 복잡하고 각 단계에서 막히는 지점이 달랐음. 더 이상 체인 디버깅에 시간 쓰지 말고 완전히 독립적인 rule을 local_rules.xml에 만들어서 체인 없이 직접 매칭:
 ```bash
@@ -1136,6 +1294,8 @@ docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
 
+> 📷 local_rules.xml에 독립 룰 100221(level 12, `decoded_as windows_eventchannel`, eventID ^13$, targetObject CurrentVersion.Run, T1547.001)을 작성 — 셸 따옴표 처리 오류로 `win.eventdata.targetObject: command not found`, chown 인자 누락 오류가 섞임.
+
 ^13\$가 XML에 그대로 들어가서 regex가 ^13\$가 됨 — 잘못됨. 그리고 chown도 잘림.
 
 파일은 일단 들어간 것 같으니 내용 확인 후 권한 따로 수정:
@@ -1143,6 +1303,8 @@ docker restart single-node-wazuh.manager-1 && sleep 40
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 cat으로 확인한 local_rules.xml: 100221 룰이 의도대로 저장됨.
 ```bash
 docker exec single-node-wazuh.manager-1 bash -c "cat > /var/ossec/etc/rules/local_rules.xml << 'XMLEOF'
 <group name=\"sysmon,windows,\">
@@ -1161,6 +1323,12 @@ docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/l
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 docker restart single-node-wazuh.manager-1 && sleep 40
 ```
+
+> 📷 heredoc 구분자를 'XMLEOF'로 감싸 이스케이프 문제 없이 100221을 다시 작성하고 소유자 변경·출력 확인·재시작.
+
+> 📷 같은 작성·확인 과정의 화면(100221: decoded_as windows_eventchannel, eventID ^13$, targetObject (?i)CurrentVersion.Run).
+
+> 📷 EvilToday18 삭제 → EvilToday19 생성.
 
 현재까지 확인된 사실 정리:
 
