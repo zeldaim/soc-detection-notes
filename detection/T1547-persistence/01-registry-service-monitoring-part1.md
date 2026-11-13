@@ -2183,6 +2183,8 @@ local_rules.xml 확인:
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 ```
 
+> 📷 당시 local_rules.xml: 185011 덮어쓰기(level 3) + 100220(if_sid 92302, targetObject (?i)CurrentVersion\.Run, T1547.001).
+
 XML 정상
 
 if_sid>92302 확인
@@ -2198,6 +2200,8 @@ logtest로 92302 이벤트 ID를 직접 시뮬레이션해서 field 이름 확�
 docker exec single-node-wazuh.manager-1 grep -a "Test4" /var/ossec/logs/alerts/alerts.json | python3 -m json.tool 2>/dev/null | grep -i "target\|eventdata"
 ```
 
+> 📷 alerts.json에서 Test4의 targetObject/eventdata 추출 → 출력 없음.
+
 Test4가 alerts에 없어 — restart 후 새 이벤트가 없음.
 ```bash
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test6 /t REG_SZ /d C:\evil.exe /f
@@ -2206,12 +2210,18 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test6 /t REG_SZ 
 docker exec single-node-wazuh.manager-1 grep -a "Test6" /var/ossec/logs/alerts/alerts.json | python3 -m json.tool 2>/dev/null | grep -i "target\|eventdata"
 ```
 
+> 📷 Test6도 같은 방법으로 조회 → 출력 없음.
+
+> 📷 DESKTOP-… 에이전트의 마지막 알림 시각 08:10:40 — 에이전트 연결은 살아 있음.
+
 08:10:40 — 최근 이벤트를 확인하고 agent연결이 살아있음을 확인함
 
 Test6 트리거 후 alerts에 92302는 들어왔는지:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "92302" /var/ossec/logs/alerts/alerts.json | tail -1 | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d['timestamp'], d['data']['win']['eventdata'].get('targetObject',''))"
 ```
+
+> 📷 alerts.json에서 **92302 알림 발견**: 08:08:17, targetObject `HKU\<SID>\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\Test5` — 기본 룰 92302는 동작하고 있었음.
 
 targetObject에 Current Version\\Run\Test5 92302는 잡히고 있는데 100220이 체이닝이 안되고 있음.
 
@@ -2236,6 +2246,8 @@ print('done')
 ```bash
 docker exec single-node-wazuh.manager-1 grep "match\|field" /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 python으로 100220의 field 조건을 `<match>CurrentVersion.Run</match>`로 바꾸려 했지만 grep 결과 field 줄이 그대로 남음(이스케이프 차이로 치환 실패).
 
 replace가 먹히지 않음 field줄이 그대로.. 백슬레시 이스케이프 문제.
 
@@ -2265,12 +2277,16 @@ ENDOFFILE'
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml && docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysisd)'
 ```
 
+> 📷 heredoc으로 local_rules.xml을 다시 작성(100220: if_sid 92302 + `match CurrentVersion`). 따옴표 없는 구분자라 `$(win.eventdata.image)`가 셸 명령으로 해석돼 "command not found". 소유자 변경 후 analysisd HUP.
+
 $(win.eventdata.image) 가 bash에서 실행되려 해서 오류
 
 description에서 $ 때문
 ```bash
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 저장된 파일: 100220 description이 "T1547 - Run key modified by "로 잘림(셸이 `$(...)` 부분을 지움). match CurrentVersion은 들어감.
 
 파일내용을 확일해보니 match> CurrentVersion 들어갔고 권한도 됨. HUP도 됐으니 바로 트리거 : `
 ```bash
@@ -2280,12 +2296,16 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test7 /t REG_SZ 
 docker exec single-node-wazuh.manager-1 grep -a "100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
 
+> 📷 alerts.json에서 100220 → 내 grep 명령의 sudo 로그(5402)만 나옴.
+
 sudo로그만 나옴,
 
 Test7이 92302로 들어왔는지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Test7" /var/ossec/logs/alerts/alerts.json | tail -1
 ```
+
+> 📷 **Test7 알림 확인**: 08:15:20 rule **92302 "Registry entry to be executed on next logon was modified using command line application reg.exe"**(level 6, T1547.001 Persistence/Privilege Escalation), Sysmon EventID 13, RuleName T1547_Run_Key_Create, Image reg.exe, TargetObject …\CurrentVersion\Run\Test7, Details C:\evil.exe — Run 키 변경이 알림으로 올라오기 시작.
 
 Test7은 92302로 잡혔지만 100220이 체이닝 되고 있지 않음.
 
@@ -2310,6 +2330,8 @@ ENDOFFILE'
 ```bash
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml && docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysisd)'
 ```
+
+> 📷 local_rules.xml 재작성: 100220(level 12, **if_group sysmon_eid13_detections**, match CurrentVersion, T1547.001) — 92302가 속한 그룹을 부모로 사용. 소유자 변경 후 analysisd HUP.
 ```bash
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test8 /t REG_SZ /d C:\evil.exe /f
 ```
@@ -2353,6 +2375,8 @@ docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysi
 field는 match와 달리 decoded field를 직접 참조
 
 targetObject 값에 CurrentVersion.Run 이 있기때문이다.
+
+> 📷 100220의 조건을 `field win.eventdata.targetObject = CurrentVersion.Run`으로 바꿔 다시 작성·HUP.
 ```bash
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test9 /t REG_SZ /d C:\evil.exe /f
 ```
@@ -2391,6 +2415,8 @@ ENDOFFILE'
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
 docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysisd)'
 ```
+
+> 📷 기본 룰 **92302를 level 12로 overwrite**(if_group sysmon_eid13_detections, targetObject CurrentVersion.Run, group에 sysmon_eid13_detections 유지)하는 방식으로 변경.
 ```bash
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test10 /t REG_SZ /d C:\evil.exe /f
 ```
@@ -2420,6 +2446,8 @@ docker-compose.yml에서 ossec.conf처럼 rules도 volume mount가 있는지 확
 grep -A3 "rules\|local_rules" ~/wazuh-docker/single-node/docker-compose.yml
 ```
 
+> 📷 호스트 docker-compose.yml에서 rules/local_rules 마운트 설정 검색 → 없음(룰 파일은 마운트되지 않음).
+
 rules volume mount가 없음.
 
 overwriter가 실제로 로드 되었는지 확인.
@@ -2427,12 +2455,16 @@ overwriter가 실제로 로드 되었는지 확인.
 docker exec single-node-wazuh.manager-1 grep -a "overwrite\|92302" /var/ossec/logs/ossec.log | tail -5
 ```
 
+> 📷 ossec.log에서 overwrite·92302 관련 로그 → 없음.
+
 HUP이 analysisd를 못 찾고 있음.
 
 prep확인:
 ```bash
 docker exec single-node-wazuh.manager-1 pgrep -a wazuh-analysisd
 ```
+
+> 📷 `pgrep -a wazuh-analysisd` → PID 512.
 
 pid 512
 
@@ -2444,6 +2476,8 @@ docker exec single-node-wazuh.manager-1 kill -HUP 512
 docker exec single-node-wazuh.manager-1 grep -a "overwrite\|Loaded" /var/ossec/logs/ossec.log | tail -5
 ```
 
+> 📷 `docker exec … kill -HUP 512` → kill 명령이 PATH에 없어 실패.
+
 kill이 컨테이너에 없어. bash로 감싸야 한다.:
 ```bash
 docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP 512'
@@ -2452,12 +2486,16 @@ docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP 512'
 docker exec single-node-wazuh.manager-1 grep -a "overwrite\|Loaded" /var/ossec/logs/ossec.log | tail -5
 ```
 
+> 📷 `bash -c 'kill -HUP 512'`로 신호 전달 후 ossec.log: modulesd·SCA 정책 로드 로그만 보임(룰 재로드 로그는 없음).
+
 HUP 됐는데 "overwrite" 로그가 없음.  analysisd가 룰 리로드 로그를 안남기고 있음.
 
 트리거하고 92302가 level 12로 뜨는지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "\"id\":\"92302\"" /var/ossec/logs/alerts/alerts.json | tail -1 | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print('level:', d['rule']['level'])"
 ```
+
+> 📷 alerts.json의 최신 92302 알림 level → 여전히 **6**(overwrite한 level 12가 반영되지 않음).
 
 level 6 그대이다. overwriter가 완전히 무시되고 있음.
 
@@ -2466,12 +2504,16 @@ Wazuh Docker에서 rules가 어디서 오는지 확인:
 docker exec single-node-wazuh.manager-1 find /var/ossec/ruleset -name "*.xml" | xargs grep -l "92302" 2>/dev/null
 ```
 
+> 📷 `/var/ossec/ruleset` 아래 XML에서 "92302" 검색 → 결과 없음.
+
 ruleset에  없음.
 
 다른 경로로:
 ```bash
 docker exec single-node-wazuh.manager-1 find / -name "*.xml" 2>/dev/null | xargs grep -l "92302" 2>/dev/null
 ```
+
+> 📷 컨테이너 전체(/)의 XML에서 "92302" 검색 → 역시 없음(이 시점 버전의 룰셋 파일에서는 문자열로 찾지 못함).
 
 92302가 어떤 XML 파일에도 없다. 그것은 이 룰이 컴파일된 바이너리 ruleset에 내장되어있음을 의미한다.
 
@@ -2494,6 +2536,8 @@ ENDOFFILE'
 docker exec single-node-wazuh.manager-1 chown wazuh:wazuh /var/ossec/etc/rules/local_rules.xml
 docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysisd)'
 ```
+
+> 📷 독립 룰로 다시 작성: 100220(level 12, `decoded_as windows_eventchannel`, eventID ^13$, targetObject CurrentVersion.Run, T1547.001) — 부모 룰에 의존하지 않는 형태. 소유자 변경·HUP.
 ```bash
 reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test11 /t REG_SZ /d C:\evil.exe /f
 ```
@@ -2519,6 +2563,8 @@ Wazuh는 이벤트당 룰 하나만 발동이된기 때문에 92302가 먼저 �
 docker exec single-node-wazuh.manager-1 find / -path /proc -prune -o -name "*.xml" -print 2>/dev/null | xargs grep -l "sysmon_eid13_detections" 2>/dev/null
 ```
 
+> 📷 컨테이너 전체 XML에서 "sysmon_eid13_detections" 검색 → 출력 없음(xargs 파이프 문제로 결과가 안 나옴).
+
 sysmon_eid13_detections 그룹도 어떤 파일에도 없다. 92302는 완전히 컴파일된 내장 룰이다.
 
 결론 : Wazuh 4.9에서 92302는 바이러니에 내장이 되어있어서 overwrite도 안 되고 체이닝도 안됨
@@ -2532,6 +2578,8 @@ docker exec single-node-wazuh.manager-1 grep -A2 "rule_dir\|rule_include\|rulese
 
 ```
 
+> 📷 매니저 ossec.conf의 ruleset: 기본 decoder_dir·rule_dir는 ruleset/…(0215-policy_rules.xml 제외), 사용자 정의는 etc/decoders·etc/rules.
+
 - ruleset/rules — 기본 룰 (92302 여기 있음)
 - etc/rules — 사용자 룰 (local_rules.xml 여기 있음)
 
@@ -2544,12 +2592,16 @@ docker exec single-node-wazuh.manager-1 ls /var/ossec/ruleset/rules/ | grep -i s
 
 ```
 
+> 📷 ruleset/rules의 Sysmon 룰 파일: 0330-sysmon_rules, 0595-win-sysmon_rules, 0800(id_1), 0810(id_3), 0820(id_7), 0830(id_11), **0860(id_13)**, 0870(id_8), 0945(id_10), 0950(id_20).
+
 0860-sysmon_id_13.xml — 여기에 92302가 있음
 ```bash
 
 docker exec single-node-wazuh.manager-1 grep -n "92302\|sysmon_eid13" /var/ossec/ruleset/rules/0860-sysmon_id_13.xml | head -10
 
 ```
+
+> 📷 0860-sysmon_id_13.xml: 9줄 group sysmon,sysmon_eid13_detections,windows / 31줄 92302 level 6 — 파일 이름을 지정해 grep하면 찾아짐.
 
 0860-sysmon_id_13.xml line 31에 92302가 있음.
 
@@ -2560,6 +2612,8 @@ docker exec single-node-wazuh.manager-1 grep -n "92302\|sysmon_eid13" /var/ossec
 docker exec single-node-wazuh.manager-1 sed -n '25,50p' /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 
 ```
+
+> 📷 0860 25~50줄: 92302(if_sid 92300, `win.eventdata.image (?i)reg\.exe`, "Registry entry … modified using reg.exe", T1547.001)와 92303(level 12, details에 VNC/tvnserver.exe — 원격 접속 도구). **92302는 reg.exe일 때만 발동**한다는 것을 확인.
 
 92302의 부모는 92300
 
@@ -2590,10 +2644,14 @@ docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysi
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Test12" -Value "C:\evil.exe" -Force
 ```
 
+> 📷 PowerShell로 Test12 = C:\evil.exe를 Run 키에 생성.
+
 Test12 실행확인
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Test12\|100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 Test12·100220 → 내 sudo grep 로그(5402)만 나옴.
 
 sudo 로그만 확인됨,
 
@@ -2603,6 +2661,8 @@ TEST12가 확인 안됨.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -n "92300" /var/ossec/ruleset/rules/0860-sysmon_id_13.xml | head -5
 ```
+
+> 📷 0860에서 92300: level 0, 다른 룰들이 if_sid 92300으로 체이닝.
 
 92300은 level 0 - 이것 때문에 문제가 발생함.
 
@@ -2672,10 +2732,14 @@ docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysi
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Test13" -Value "C:\evil.exe" -Force
 ```
 
+> 📷 PowerShell로 Test13 생성.
+
 TEST13 실행확인
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Test13\|100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 Test13·100220 → 역시 sudo 로그만.
 
 Test13이 아직 alerts에 없음.
 
@@ -2684,6 +2748,8 @@ sysmon_event_13 그룹이 어디에서 오는지 확인:
 docker exec single-node-wazuh.manager-1 grep -rn "sysmon_event_13" /var/ossec/ruleset/rules/ | head -5
 ```
 
+> 📷 sysmon_event_13 그룹 위치: 0330(98줄)·0595(139줄)에서 부여, 0860의 12·52·85줄에서 if_group으로 사용.
+
 sysmon_event_13 그룹은 0330-sysmon_rules.xml과 0595-win-sysmon_rules.xml에서 생성돼고, 0860이 그걸 if_group으로 참조하는 구조임.
 ```bash
 docker restart single-node-wazuh.manager-1 && sleep 40
@@ -2691,6 +2757,8 @@ docker restart single-node-wazuh.manager-1 && sleep 40
 ```
 
 PowerShell로 Test14 트리거하고 확인
+
+> 📷 매니저 재시작 후 40초 대기.
 ```bash
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Test14" -Value "C:\evil.exe" -Force
 ```
@@ -2698,10 +2766,14 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 grep -a "Test14\|100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
 
+> 📷 alerts.json에서 Test14·100220 → sudo 로그(5402)만.
+
 Test14도 없음. Windows agent가 재연결 됐는지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "DESKTOP-5408CBA" /var/ossec/logs/alerts/alerts.json | tail -1 | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d['timestamp'])"
 ```
+
+> 📷 DESKTOP-… 에이전트 마지막 알림 08:41:01 — 연결은 정상.
 
 08:41:01 — agent 연결
 
@@ -2714,12 +2786,16 @@ Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 5 | Where-Object {$_.Id -eq 13 -and $_.Message -like "*Test14*"} | FL TimeCreated
 ```
 
+> 📷 PowerShell `Set-ItemProperty`로 Test14 = C:\evil.exe 설정, Sysmon에서 Test14가 들어간 EventID 13 확인(17:43:00).
+
 Sysmon이 Test14 EventID 13을 캡처
 
 근데 Wazuh alerts에 없음.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Test14" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 Test14 → 없음.
 
 Sysmon은 잡았는데 Wazuh alerts 에는 없음.
 
@@ -2731,6 +2807,8 @@ logall켜져 있는지 확인 - archives에 test14가 있는지 확인 :
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Test14" /var/ossec/logs/archives/archives.json | tail -3
 ```
+
+> 📷 archives.json에서 Test14 → 파일 없음(logall 꺼짐).
 
 restart후 logall설정이 날아감.
 
@@ -2810,10 +2888,14 @@ docker cp ~/0860-sysmon_id_13.xml single-node-wazuh.manager-1:/var/ossec/ruleset
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "Test15" -Value "C:\evil.exe" -Force
 ```
 
+> 📷 PowerShell로 Test15 = C:\evil.exe 생성.
+
 Test15 실행
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Test15\|100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 수정한 0860 파일을 컨테이너에 넣고 재시작 후 alerts.json에서 Test15·100220 → sudo 로그만.
 
 sudo 로그
 
@@ -2821,9 +2903,13 @@ TEST15 alerts가 없음.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -n "100220" /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
+
+> 📷 같은 검색 반복 — 결과 변화 없음.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -n "100220" /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
+
+> 📷 100220을 기본 룰 파일 0860-sysmon_id_13.xml 31줄에 직접 추가한 상태(level 12).
 
 00220이 line 31에 들어가 있지만, Test15가 alerts에 없음
 
@@ -2832,10 +2918,14 @@ agent가 Test15를 실제로 보냈는지 확인:
 docker exec single-node-wazuh.manager-1 grep -a "Test15" /var/ossec/logs/alerts/alerts.json
 ```
 
+> 📷 그 상태에서 alerts.json에서 Test15 → 없음.
+
 windows에서 angent로그 확인:
 ```bash
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 5
 ```
+
+> 📷 Windows 에이전트 ossec.log: 17:55:50 offline → 17:55:59 `(4102) Connected to the server`, 17:56:00 "Agent is now online" — 매니저 재시작 뒤 재연결.
 
 Agent 방금 재연결 — 17:55:59 Connected, 17:56:00 Agent is now online. Test15는 연결 끊겼을 때 트리거해서 못 보넨 것이다.
 ```bash
@@ -2846,12 +2936,16 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 grep -a "100220\|Test15" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
 
+> 📷 alerts.json에서 100220·Test15 → sudo 로그(5402)만.
+
 또 sudo만. Test15 자체가 alerts에 없음 .
 
 windows에서 실행이 되었는지 확인:
 ```bash
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 5 | Where-Object {$_.Id -eq 13 -and $_.Message -like "*Test15*"} | FL TimeCreated
 ```
+
+> 📷 Windows: Sysmon에서 Test15가 들어간 EventID 13 조회 → 없음(에이전트가 끊겨 있던 사이 생성됐거나 Sysmon이 기록하지 않음).
 
 Sysmon도 Test15를 못잡음.
 
@@ -2863,10 +2957,14 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 
 ```
 
+> 📷 PowerShell로 EvilPS1 = C:\evil.exe를 Run 키에 생성.
+
 EvilPS1 실행되었음.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilPS1\|100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 EvilPS1·100220 → sudo 로그만.
 
 EvilPS1도 없음.
 
@@ -2880,6 +2978,8 @@ Sysmon config exclude 룰에 PowerShell이 걸려있는지 확인:
 C:\Windows\sysmon64.exe -c | Select-String "powershell\|exclude" -CaseSensitive:$false
 ```
 
+> 📷 `sysmon64.exe -c`: 설정 파일 sysmon_persistence.xml, RegistryEvent include 규칙 T1547_Run_Key_Create/Set·T1547_Startup_Registry, FileCreate T1547_Startup_Folder_LNK — Sysmon 설정은 정상.
+
 Sysmon config 정상 RegistryEvent onmatch: include에 CurrentVersion\Run 이 있음.
 
 EvilPS1이 Sysmon에 안 잡힌 이유 — 이미 같은 키가 존재해서 SetValue가 아니라 그냥 무시됐을 수 있음.
@@ -2891,10 +2991,14 @@ Start-Sleep 2
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 5 | Where-Object {$_.Id -eq 13 -and $_.Message -like "*EvilPS2*"} | FL TimeCreated
 ```
 
+> 📷 EvilPS1 삭제 → EvilPS2 생성, 2초 뒤 Sysmon EventID 13(18:03:55) 기록 확인.
+
 Sysmon이 EvilPS2 EventID 13을 잡음
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilPS2\|100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 EvilPS2·100220 → sudo 로그만. **1편은 여기서 끝남** — PowerShell로 만든 Run 키 변경은 Sysmon까지는 기록되지만 Wazuh 알림으로 이어지지 않는 상태로 정리됐고, 원인 추적은 2·3편과 '탐지 성공' 편으로 이어짐.
 
 아직도sudo만 잡힘
 
