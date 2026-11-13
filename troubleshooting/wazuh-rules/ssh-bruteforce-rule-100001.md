@@ -1,6 +1,6 @@
 # SSH 브루트포스 커스텀 룰(100001) 탐지 실패
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
 SSH 룰 XML
 ```bash
@@ -25,6 +25,8 @@ exit
 sudo docker restart single-node-wazuh.manager-1
 ```
 
+> 📷 Wazuh Threat Hunting 화면(최근 24시간 601건). agent 003에서 5557(unix_chkpwd 비밀번호 확인 실패)·5760(sshd 인증 실패, T1110.001/T1021.004)이 반복되고, 5763(sshd brute force, level 10)이 발동함. 커스텀 룰 100001은 목록에 없음.
+
 룰은 작동하고 있지만 커스텀 룰은 100001은 안보임.
 
 - 5557 — unix_chkpwd: Password check failed (level 5)
@@ -39,6 +41,8 @@ grep -r "5763" /var/ossec/ruleset/rules/
 
 5763룰 열어 frequency/timeframe 설정을 확인하고, 조건이 100001이랑 겹치는지 확인한다.
 
+> 📷 `grep -r "5763" /var/ossec/ruleset/rules/` 결과: `0095-sshd_rules.xml`의 `<rule id="5763" level="10" frequency="8" timeframe="120" ignore="60">`.
+
 5763 기본 룰 조건:
 
 - frequency="8" timeframe="120" → 120초 내 8회
@@ -50,12 +54,16 @@ grep -r "5763" /var/ossec/ruleset/rules/
 grep -r "100001" /var/ossec/etc/rules/local_rules.xml
 ```
 
+> 📷 `grep -r "100001" local_rules.xml` 결과: `<rule id="100001" level="5">` — 작성한 level 10·frequency 조건이 아니라 level 5짜리 다른 룰이 들어가 있음.
+
 커스텀 룰이 초기 설정과 다르게 설정되어 있음을 확인함.
 
 전체 내용 확인
 ```bash
 cat /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 당시 `local_rules.xml` 전체: 100001(level 5, if_sid 5716, srcip 1.1.1.1 단순 탐지), 100004(level 10, if_sid 4100, match PORTSCAN, T1046), 100005(level 10, if_sid 31103, url에 union|select|insert|drop|delete|update|cast|exec|declare|--|%27|%3B, T1190).
 
 - 100001 — IP 1.1.1.1 SSH 실패 단순 탐지 (브루트포스 chaining 아님)
 - 100004 — Nmap 포트스캔 ✓
@@ -114,6 +122,8 @@ sudo docker restart single-node-wazuh.manager-1
 ```
 
 확인
+
+> 📷 룰 수정·재시작 후 Threat Hunting(5,068건): 5760·5557·5503과 함께 **100001 "SSH Brute Force Attack Detected - MITRE T1110" (level 10)** 이 발동한 것을 확인.
 
 - rule.id: 100001
 - rule.description: SSH Brute Force Attack Detected - MITRE T1110

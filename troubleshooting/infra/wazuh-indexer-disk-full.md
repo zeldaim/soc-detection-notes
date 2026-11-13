@@ -1,6 +1,6 @@
 # Wazuh Indexer & VM 디스크 풀
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
 ## 2026-05-01 Troubleshooting — Wazuh Indexer & VM Disk Full
 

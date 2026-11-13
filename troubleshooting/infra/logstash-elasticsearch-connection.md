@@ -1,8 +1,10 @@
 # Logstash → Elasticsearch 연결 실패
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
 ### 오류 : 포트 충돌
+
+> 📷 Kibana(localhost:5601) 초기 설정 화면에서 `https://localhost:9200` 연결 시 "Couldn't connect to cluster". 같은 호스트에서 wazuh-indexer 4.9.0이 이미 9200 포트를 쓰고 있어 ELK의 Elasticsearch와 포트가 충돌함.
 ```bash
 [yhc@localhost elk]$ docker ps -a
 CONTAINER ID   IMAGE                                                  COMMAND                   CREATED         STATUS                     PORTS                                                                                                                                                                 NAMES
@@ -24,6 +26,8 @@ cat ~/elk/docker-compose.yml | grep 9200
 "9201:9200"  으로 설정
 
 ## [Troubleshooting] Logstash → Elasticsearch 연결 실패
+
+> 📷 포트를 `9201:9200`으로 바꾼 뒤 Kibana "Welcome to Analytics!" 화면 진입 — Elasticsearch 연결 성공, 아직 데이터 없음.
 
 상황: kali가 공격을 하고 있지만 데이터가 없음.
 
@@ -192,6 +196,8 @@ Wazuh가 Docker 컨테이너 안에 있어서 Rocky Linux 호스트에 alerts.js
 sudo docker exec -it single-node-wazuh.manager-1 ls /var/ossec/logs/alerts/
 ```
 
+> 📷 호스트에서 `ls /var/ossec/logs/alerts/` → 디렉터리 없음. 매니저 컨테이너 안에서 `docker exec ... ls`하면 `2026  alerts.json  alerts.log`가 있음 — 알림 파일은 컨테이너 내부에 있어 볼륨/경로를 맞춰야 Logstash가 읽을 수 있음.
+
 ### 문제
 
 Filebeat가 호스트의 파일을 보고 있는데 실제 파일은 컨테이너 안에있음.
@@ -213,6 +219,8 @@ cat /var/ossec/logs/alerts/alerts.json | tail -5
 ```
 
 alerts.json 데이터 확인-SSH 브루트포스 로그
+
+> 📷 `alerts.json` 내용: 192.168.190.130에서 온 sshd "Failed password"와 5557(unix_chkpwd Password check failed, T1110.001 Password Guessing, firedtimes 4707~4708) 알림이 JSON으로 쌓여 있음(PCI DSS 10.2.4, GDPR, HIPAA, NIST 800-53 매핑 포함).
 
 Wazuh Manager 볼륨을 호스트에 마운트
 ```bash

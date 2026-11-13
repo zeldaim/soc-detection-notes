@@ -1,6 +1,6 @@
 # Wazuh 커스텀 룰 미발동 — SQL Injection 탐지 실패
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
 ## 환경: Rocky Linux 9 / Kali Linux / Wazuh 4.9.0 (Docker) / ELK Stack
 
@@ -42,6 +42,8 @@ sudo grep -i "union\|select\|drop\|%27" /var/log/httpd/access_log
 
 → 공격 로그 정상 기록. HTTP 403으로 응답 ✅
 
+> 📷 Rocky에서 `sudo grep -i "union\|select\|drop\|%27" /var/log/httpd/access_log` 결과: 192.168.190.130(Kali)에서 curl로 보낸 `?id=1' union select 1,2,3--`, `?id=1' or '1'='1`, `?search=admin' drop table users--` 요청이 모두 HTTP 403으로 기록됨.
+
 #### Wazuh 알럿 확인 (Rocky)
 ```bash
 docker exec single-node-wazuh.manager-1 \
@@ -49,6 +51,8 @@ docker exec single-node-wazuh.manager-1 \
 ```
 
 → 출력 없음 ❌
+
+> 📷 같은 access_log 9줄(11:21~11:58, 모두 403). 로그는 정상 수집 대상이지만 Wazuh 알림 검색 결과는 비어 있음.
 
 ### 🔎 원인 조사
 
@@ -77,6 +81,8 @@ docker exec single-node-wazuh.manager-1 \
 ```
 
 → local_rules.xml에 rule 100005 존재 ✅
+
+> 📷 에이전트 `ossec.conf`의 localfile: /var/log/messages·/var/log/secure(syslog), audit.log(audit), **/var/log/httpd/access_log(apache)** 수집 설정 확인. 매니저 컨테이너에서 `grep -r "SQL"` → local_rules.xml에 "SQL Injection attempt detected" 룰 존재.
 
 #### Step 3. Rule 내용 상세 확인
 ```bash

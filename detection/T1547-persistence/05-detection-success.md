@@ -1,6 +1,6 @@
 # T1547 Persistence 탐지 — 탐지 성공
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
 ```bash
 docker exec single-node-wazuh.manager-1 cat /var/ossec/ruleset/rules/0860-sysmon_id_13.xml

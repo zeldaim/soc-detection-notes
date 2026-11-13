@@ -1,6 +1,6 @@
 # SSL 인증서 잔여물로 인한 인증 문제 (Wazuh 설치)
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
 설정파일 누락으로 인한 연쇄 오류
 
@@ -284,3 +284,5 @@ d228ce1b65be   wazuh/wazuh-manager:4.9.0     "/init"                   52 second
 ```text
 https://localhost:443
 ```
+
+> 📷 인증서 정리 후 재배포: `docker ps`에서 wazuh-dashboard:4.9.0 컨테이너가 Up, 브라우저에서 Wazuh 로그인 화면(localhost/app/login) 정상 표시.

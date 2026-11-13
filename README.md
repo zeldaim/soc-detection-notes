@@ -1,7 +1,7 @@
 # SOC Detection & Troubleshooting Notes
 
 Wazuh SIEM 기반 홈 SOC 랩에서 직접 구현한 **탐지 룰**과 운영 중 겪은 **장애 대응 기록**을 정리한 레포입니다.
-개인 학습 노트(Notion)에 쓰던 기록을 옮겨 왔고, 스크린샷은 빼고 명령어·설정·분석 과정만 남겼습니다.
+개인 학습 노트(Notion)에 쓰던 기록을 옮겨 왔습니다. 스크린샷은 이미지 대신 📷 표시로 화면 내용(알림, 룰 ID, 명령 결과)을 글로 옮겼습니다.
 
 - 환경: Rocky Linux 9 + Docker (Wazuh 4.x single-node), Windows 10/11 + Sysmon 에이전트, Kali Linux(공격 VM)
 - 관련 레포: [wazuh-slack-alertbot](https://github.com/zeldaim/wazuh-slack-alertbot) · [kisa-windows-hardening-lab](https://github.com/zeldaim/kisa-windows-hardening-lab) · [home-soc-lab](https://github.com/zeldaim/home-soc-lab)
@@ -21,7 +21,7 @@ Wazuh SIEM 기반 홈 SOC 랩에서 직접 구현한 **탐지 룰**과 운영 �
 |---|---|---|
 | SSH 브루트포스 커스텀 룰(100001) 미발동 | 기본 룰 5763과 조건 중복, 실제 적용된 룰이 의도와 다름 | [ssh-bruteforce-rule-100001.md](troubleshooting/wazuh-rules/ssh-bruteforce-rule-100001.md) |
 | SQL Injection 커스텀 룰(100005) 미발동 | 부모 룰 31103은 정상 → 룰 수정 후 매니저 재시작·새 트래픽 없이 이전 로그를 확인한 것이 원인. 룰 파일은 호스트가 아니라 컨테이너 내부에 있음 | [sqli-custom-rule-not-firing.md](troubleshooting/wazuh-rules/sqli-custom-rule-not-firing.md) |
-| Nmap 스캔 로그는 `/var/log/secure`에 찍히는데 알림(100004) 없음 | `local_rules.xml` XML 구조 오류 | [rule-xml-structure-error.md](troubleshooting/wazuh-rules/rule-xml-structure-error.md) |
+| Nmap 스캔 로그는 `/var/log/secure`에 찍히는데 알림(100004) 없음 | 에이전트 `ossec.conf`의 `/var/log/secure` 블록에 `<log_format>` 누락 → 수정 중 중복 삽입(XML 구조 오류). 정리 후 100004 발동 | [rule-xml-structure-error.md](troubleshooting/wazuh-rules/rule-xml-structure-error.md) |
 
 ### 인프라 운영
 | 증상 | 문서 |

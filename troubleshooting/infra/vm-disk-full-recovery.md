@@ -1,7 +1,8 @@
 # 가상 머신 디스크 풀 장애 복구 보고서
 
-> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 생략했습니다.
+> 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
+> 📷 Hydra 실습 중 `/var/log/secure`에 root 대상 "Failed password"(192.168.190.130)와 unix_chkpwd 실패가 대량 기록. `dnf clean all`이 `[Errno 28] 장치에 남은 공간이 없음`으로 실패, `df -h`로 `/dev/mapper/rl-root 48G 100%` 확인 → `truncate -s 0`으로 secure·messages·ossec.log 비운 뒤 `dnf clean all` 성공(52개 파일 삭제).
 > 발생 일시: 2026-04-08
 
 관련 실습: Wazuh SIEM 구축 및 Hydra 무차별 대입 공격(Brute Force) 테스트
