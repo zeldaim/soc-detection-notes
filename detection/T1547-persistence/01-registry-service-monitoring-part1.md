@@ -1474,6 +1474,8 @@ EventID 13이 alerts에 없으면 Sysmon config에서 Registry 이벤트 수집�
 
 > 📷 Windows: SOCLabFinal3 = C:	emp\evil.exe가 HKCU Run 키에 등록되어 있음을 확인.
 
+> 📷 alerts.json: 92200(EventID 11, Startup 폴더 .lnk) 알림만 있고 `"eventID":"13"`로 검색하면 0건.
+
 Sysmon config 확인:
 ```bash
 # Windows에서
@@ -1544,6 +1546,10 @@ Windows agent 설정 확인:
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.conf" | Select-String -Pattern "Microsoft-Windows-Sysmon" -Context 3,3
 ```
 
+> 📷 archives.json에서 EventID 13 검색 → `No such file or directory`(파일 자체가 없음).
+
+> 📷 Windows 에이전트 ossec.conf 끝부분: Sysmon/Operational 채널을 eventchannel 형식으로 수집하는 localfile 블록 확인.
+
 2가지 문제 발견:
 
 1. archives.json 없음 — manager에서 archiving이 꺼져 있음
@@ -1561,6 +1567,8 @@ manager에서 archives 활성화해서 드롭되는 이벤트확인:
 ```bash
 docker exec single-node-wazuh.manager-1 bash -c 'grep -A2 "logall" /var/ossec/etc/ossec.conf | head -10'
 ```
+
+> 📷 매니저 ossec.conf: logall no, logall_json no(email_notification no, smtp 예시값).
 
 logall_json>no — archives가 꺼져 있음.
 
@@ -1587,6 +1595,8 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 grep -a '"eventID":"13"' /var/ossec/logs/archives/archives.json | tail -3
 ```
 
+> 📷 archives.json 없음(EventID 13 검색 실패) — logall이 꺼져 있어 원본 이벤트를 남기지 않는 상태.
+
 archives.json 자체가 아직 없다. restart 후 파일이 생성됐는지 확인:
 ```bash
 ls -la /var/ossec/logs/archives/ 2>/dev/null || docker exec single-node-wazuh.manager-1 ls -la /var/ossec/logs/archives/
@@ -1596,6 +1606,8 @@ ls -la /var/ossec/logs/archives/ 2>/dev/null || docker exec single-node-wazuh.ma
 ```bash
 docker exec single-node-wazuh.manager-1 grep "logall" /var/ossec/etc/ossec.conf
 ```
+
+> 📷 archives 디렉터리(archives.log 0바이트)와 ossec.conf의 logall=no 재확인.
 
 여전히 둘다 no → sed 명령이 실패한 것이기 때문에 직접 수정:
 ```bash
@@ -1617,6 +1629,8 @@ print('done')
 docker exec single-node-wazuh.manager-1 grep "logall" /var/ossec/etc/ossec.conf && docker restart single-node-wazuh.manager-1
 ```
 
+> 📷 python으로 logall·logall_json을 yes로 바꾸고 grep으로 yes 확인한 뒤 매니저 재시작.
+
 logall>yes, logall_json>yes 확인됐고 restart 됨.
 ```bash
 New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Name "SOCLabFinal4" -Value "C:\temp\evil.exe" -Force
@@ -1625,6 +1639,8 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 ```bash
 sleep 40 && docker exec single-node-wazuh.manager-1 grep -a '"eventID":"13"' /var/ossec/logs/archives/archives.json | tail -3
 ```
+
+> 📷 재시작 후 다시 grep하면 logall·logall_json이 **no로 돌아가 있음** — 여러 번 반복해도 같은 결과.
 
 restart할 때마다 no로 돌아가고 있음을 확인 Docker volume이 ossec.conf를 덮어쓰고 있음. - 컨테이너가 재시작되면 원본 config가 마운트되어 복원돼고 있음.
 
@@ -1641,15 +1657,21 @@ docker inspect single-node-wazuh.manager-1 | python3 -m json.tool | grep -A2 "os
 
 위 두 명령어를 통해 Host의 어느 파일에 컨테이너가 마운트되는지 찾아야 한다. 거기를 직접 수정해야 반영이된다.
 
+> 📷 같은 현상 반복: 컨테이너 안 ossec.conf를 고쳐도 재시작하면 원래 값으로 복원 → 호스트에서 마운트되는 원본 파일을 고쳐야 한다는 결론.
+
 Host volume을  찾기
 ```bash
 docker inspect single-node-wazuh.manager-1 --format '{{json .Mounts}}' | python3 -m json.tool | grep -B2 -A2 "ossec.conf\|config"
 ```
 
+> 📷 재시작 직후에도 logall no — 마운트 경로를 찾기 위해 `docker inspect` 단계로 넘어감.
+
 이전 명령 결과가 안보임 다시 입력
 ```bash
 docker inspect single-node-wazuh.manager-1 --format '{{json .Mounts}}' | python3 -m json.tool | grep -B2 -A2 "ossec.conf\|config"
 ```
+
+> 📷 재시작 전후로 다시 확인해도 logall·logall_json no.
 
 우선 새 명령 결과가 안찍히고 있기 때문에 logall 문제는 잠깐 우회
 
@@ -1660,6 +1682,8 @@ Windows agent가 EventID13을 실제로 보내는지 agent 로그에서 직접 �
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 50 | Select-String "13\|Sysmon\|registry\|error" -CaseSensitive:$false
 ```
 
+> 📷 Windows 에이전트 ossec.log 마지막 50줄에서 13/Sysmon/registry/error 검색 → 출력 없음(검색 패턴 이스케이프 문제).
+
 agent 로그가 전혀 안찍히고 있음 . Sysmon/registry 관련 로그가 안찍히고 있음.
 
 agent가 수집하고 있는 내용을 확인 .
@@ -1668,6 +1692,8 @@ raw로 확인.
 ```bash
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 30
 ```
+
+> 📷 에이전트 ossec.log 16:23~16:25: `(1216) Unable to connect to [192.168.190.128]:1514/tcp: 대상 컴퓨터에서 연결을 거부`, `(1208) enrollment service :1515 연결 실패`, `(4101) Waiting for server reply`, `Process locked due to agent is offline` 반복 — 매니저를 여러 번 재시작하는 동안 에이전트가 계속 끊김.
 
 Windows agnet가 mnager을 연결을 못하고 있음을 확인함.
 ```bash
@@ -1690,6 +1716,10 @@ Start-Sleep 10
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 10
 ```
 
+> 📷 `docker ps`: 매니저 컨테이너 Up About a minute, 1514-1515/tcp 공개는 정상.
+
+> 📷 에이전트 재시작(16:27:09 Started) 후에도 1514 연결 거부가 10초 간격으로 반복.
+
 "Connected to server" 뜨면 연결 복구. 그다음 Registry 키 다시 쓰고 결과 확인.
 
 을 할려고 했어나 Manager포트는 열려있는데 Windows에서 못붙고 있음.
@@ -1705,9 +1735,15 @@ windows에서 직접 연결 테스트
 Test-NetConnection -ComputerName 192.168.190.128 -Port 1514
 ```
 
+> 📷 `firewall-cmd`로 1514 포트를 열려 했지만 FirewallD is not running.
+
+> 📷 Windows `Test-NetConnection 192.168.190.128 -Port 1514` → **TCP connect failed**(Ping은 성공, RTT 2ms).
+
 - PingSucceeded: True — IP는 닿아
 - TcpTestSucceeded: False — 1514 포트가 막혀
 - firewalld is not running — Rocky 방화벽은 꺼져있어
+
+> 📷 iptables INPUT에는 1514 규칙이 없고 DOCKER 체인에 172.18.0.3:1514 ACCEPT만 있음 → INPUT에 1514·1515 ACCEPT 규칙을 추가.
 
 IPTABLE 확인
 
@@ -1721,6 +1757,8 @@ Docker가 host의 0.0.0.0:1541의 바인딩을 하고 있는지 확인:
 ```bash
 sudo ss -tlnp | grep 1514
 ```
+
+> 📷 `ss -tlnp`/`netstat`: 0.0.0.0:1514, [::]:1514를 **docker-proxy**가 LISTEN 중.
 
 Rocky 쪽은 완전 정상
 
@@ -1736,6 +1774,10 @@ Test-NetConnection -ComputerName 192.168.190.128 -Port 55000
 # Windows에서 연결 시도가 Rocky까지 오는지 확인
 sudo tcpdump -i any -n port 1514 -c 10
 ```
+
+> 📷 규칙 추가 후에도 Windows에서 1514·55000 모두 TCP 연결 실패(Ping 성공) — 호스트 포트 연결 자체가 막힌 상태.
+
+> 📷 Rocky에서 `tcpdump -i any port 1514`: Windows(192.168.190.131)의 SYN이 ens160 → 도커 브리지 → 컨테이너(172.18.0.3:1514)까지 전달되지만 **컨테이너가 RST로 거부** — 네트워크·방화벽이 아니라 컨테이너 안 서비스가 안 떠 있다는 뜻.
 
 패킷은 Rocky까지 오고 있음.
 ```bash
@@ -1754,6 +1796,8 @@ docker exec single-node-wazuh.manager-1 ss -tlnp | grep 1514
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "wazuh-remoted\|remoted" /var/ossec/logs/ossec.log | tail -5
 ```
+
+> 📷 매니저 ossec.log의 remoted: 07:21 "Listening on port 1514/TCP"로 시작했다가 07:20·07:22에 `SIGNAL 15 Terminated, Exit Cleaning` — 반복된 재시작 중 remoted가 내려간 상태였음.
 ```bash
 07:21:05 wazuh-remoted: Started. Listening on port 1514/TCP
 07:22:11 wazuh-remoted: SIGNAL (15) Terminated. Exit Cleaning...
@@ -1821,6 +1865,8 @@ docker restart single-node-wazuh.manager-1 && sleep 40 && docker exec single-nod
 
 ```
 
+> 📷 `wazuh-control status`에서 모든 데몬 not running → 컨테이너 재시작 40초 후 remoted·analysisd·authd·db·apid 등 정상 실행.
+
 핵심 프로세스는 다시 살아남.
 ```bash
 Restart-Service -Name "Wazuh" -Force
@@ -1828,10 +1874,14 @@ Start-Sleep 15
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 5
 ```
 
+> 📷 호스트에서 /var/ossec/logs/alerts/alerts.json을 grep하면 파일이 없음 — 알림 파일은 컨테이너 안에만 있음.
+
 alerts.json 파일 자체가 없어. Docker 경로로 접근해야 한다.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "100220" /var/ossec/logs/alerts/alerts.json | tail -5
 ```
+
+> 📷 컨테이너 안 `/var/ossec/logs/alerts/`: 2026 디렉터리, alerts.json, alerts.log 존재.
 
 alerts.json  확인 .
 
@@ -1867,7 +1917,11 @@ Windows에서 직접 확인:
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 10 | Where-Object {$_.Id -eq 13} | Select-Object TimeCreated, Message | FL
 ```
 
+> 📷 Windows에서 최근 Sysmon 이벤트 10개 중 EventID 13 조회 → 출력 없음.
+
 Sysmon에 EventID13을 실제로 생성했는지. Windows 이벤트 뷰어 레벨에서 확인
+
+> 📷 같은 조회 반복 — 최근 10개 안에 EventID 13이 없음(테스트 키를 다시 만들어야 함).
 
 EventID 13이 Windows 이벤트 로그에도 없음.
 
@@ -2065,6 +2119,8 @@ docker exec single-node-wazuh.manager-1 grep "if_sid" /var/ossec/etc/rules/local
 docker exec single-node-wazuh.manager-1 bash -c 'kill -HUP $(pgrep wazuh-analysisd)'
 ```
 
+> 📷 python으로 local_rules.xml의 `if_sid 185011`을 **`if_sid 92302`**(기본 룰: reg.exe로 Run 키 변경)로 바꾸고 analysisd에 HUP. if_sid가 18101·92302 두 개로 확인됨.
+
 if_sid>92302 확인. HUP도 됐음.
 ```powershell
 
@@ -2073,6 +2129,8 @@ reg add "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Test4 /t REG_SZ 
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "100220" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 100220 검색 → 5402 "Successful sudo to ROOT executed"(내가 실행한 grep 명령이 sudo 로그로 잡힌 것)만 나옴.
 
 100220이 아직 안 뜨고 sudo 로그만 확인됨. rule 5420가 “100220” 문자열을 포함하고 있어서 나옴.
 
@@ -2115,6 +2173,8 @@ docker exec single-node-wazuh.manager-1 grep -a "Test5" /var/ossec/logs/alerts/a
 docker restart single-node-wazuh.manager-1 && sleep 40 && docker exec single-node-wazuh.manager-1 /var/ossec/bin/wazuh-control status | grep remoted
 
 ```
+
+> 📷 archives의 이벤트: **reg.exe로 HKU\<SID>\…\CurrentVersion\Run\Test4 = C:\evil.exe** 설정(SetValue). 재시작 후 Test5 알림은 아직 없고 remoted 정상 실행 확인.
 
 remoted 살아있음.
 
