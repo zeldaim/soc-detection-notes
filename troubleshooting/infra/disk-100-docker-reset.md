@@ -116,6 +116,9 @@ docker exec single-node-wazuh.manager-1 du -sh /var/ossec/queue/
 ## 2026-04-15 Trouble shooting 상세 리포트
 
 1. 문제 발생
+
+> 📷 `iptables-save` 출력(도커 NAT: 9200·514·1514·1515·55000·443→5601, ELK 9201·5601·5044 DNAT)과 함께 `iptables.service does not exist` 오류. 화면 위에 "디스크 공간 부족 — 파일 시스템 루트에 891MB만 남음" 알림.
+
 - iptables.service does not exist
   - Rocky Linux 9는 iptables 서비스 대신 nftables를 기본으로 사용
   - systemclt enable iptables 실패
@@ -133,6 +136,8 @@ sudo systemctl enable --now iptables
 ```
 
 1. PORTSCAN 룰 확인 및 iptables 고정 확인
+
+> 📷 iptables-services 설치 후: INPUT 1번에 PORTSCAN LOG 규칙(RST, 1/sec burst 5, level warn) 유지, `iptables.service` enabled·active(exited) — 재부팅 후에도 규칙이 남도록 고정.
 
 iptables 영구 적용 ✅
 
@@ -156,6 +161,8 @@ docker exec single-node-wazuh.manager-1 grep -r "PORTSCAN\|portscan" /var/ossec/
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 ```
 
+> 📷 local_rules.xml 최종: 100004에 `<if_sid>4100</if_sid>` + `<match>PORTSCAN</match>`, T1046.
+
 1. 디스크 부족 원인은 Docker이고 ELK+Wazuh 컨테이너들이 로그를 계속 쌍으면서 용량을 먹고 있음
 
 확인
@@ -170,6 +177,8 @@ sudo docker system prune -f
 # Wazuh 알럿 로그 크기 확인
 sudo du -sh /var/log/
 ```
+
+> 📷 `df -h`: `/dev/mapper/rl-root 48G 중 48G 사용(100%)`, /home은 23G 여유. `docker system df`: 이미지 12.5GB, **로컬 볼륨 30.37GB**. `docker system prune -f`로는 0B 회수, /var/log는 16M뿐.
 
 원인
 ```bash
@@ -191,6 +200,8 @@ docker system df -v | grep -A 20 "Local Volumes"
 ```bash
 sudo du -sh /var/lib/docker/volumes/* | sort -rh | head -10
 ```
+
+> 📷 `docker system df -v` 볼륨별 크기: **single-node_wazuh_queue 30.2GB**, indexer-data 103.9MB, wazuh_logs 61.23MB 등 — 원인은 Wazuh 매니저 queue 볼륨.
 
 문제 볼륨 발견
 ```bash
@@ -224,6 +235,8 @@ ps aux | grep nmap
 
 1. Queue 비우기가 안됨 -디스크가 100% 꽉 차서 alpine 이미지 자체를 받을 공간이 없기 때문이다.
 
+> 📷 매니저를 멈추고 alpine 컨테이너로 queue 볼륨을 비우려 했지만 `docker: ... no space left on device` — alpine 이미지조차 받을 공간이 없음.
+
 Alpine 이미지란 Alpine Linux라는 초경량 Linux 배포판의 Docker 이미지를 말함
 
 Alpine 이미지는 Docker 컨테이너의 베이스 이미지로 자주 쓰임
@@ -255,7 +268,11 @@ sudo find /var/lib/docker -name "wazuh-queue" -type d 2>/dev/null
 df -h /
 ```
 
+> 📷 `docker exec ... rm -rf /var/ossec/queue/diff/* fim/db/* alerts/*` → "container ... is not running" (방금 매니저를 멈췄기 때문).
+
 이전에 매니저가 살아있다고 생각함.
+
+> 📷 `docker ps -a | grep wazuh`: dashboard(Up 2 days), indexer(Up 5 days), manager(Up 5 days)로 표시 — 매니저가 살아 있다고 판단한 시점의 화면.
 
 하지만 docker ps 가 캐시된 상태를 보여준 경우임.
 
@@ -287,7 +304,11 @@ docker exec single-node-wazuh.manager-1 bash -c "rm -rf /var/ossec/queue/diff/* 
 sudo ls /var/lib/docker/volumes/single-node_wazuh-queue/_data/
 ```
 
+> 📷 `docker start single-node-wazuh.manager-1` → `failed to mount: mkdir /var/lib/docker/rootfs/overlayfs/...` 실패(공간 없음). `/var/lib/docker/volumes/single-node_wazuh-queue/_data/`에 직접 접근하려 했지만 경로가 없음(볼륨 이름은 `wazuh_queue`, 하이픈이 아님).
+
 1. Wazuh queue 경로 찾기
+
+> 📷 `find /var/lib/containerd -name queue -type d`로 찾은 경로: containerd overlayfs snapshots/183/fs/var/ossec/queue 등 — 도커 데이터가 /var/lib/docker가 아니라 containerd 스냅샷 아래에 있음.
 ```bash
 /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/183/fs/var/ossec/queue
 ```
@@ -297,12 +318,16 @@ sudo ls /var/lib/docker/volumes/single-node_wazuh-queue/_data/
 sudo du -sh /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/183/fs/var/ossec/queue/*
 ```
 
+> 📷 찾은 경로를 명령처럼 실행해 "허가 거부/명령이 없습니다" — 경로는 `ls`·`du`로 다뤄야 함(입력 실수).
+
 경로가 실행 파일로 인식이 됨
 
 1. du 명령어 제대로 실행
 ```bash
 sudo du -sh /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/183/fs/var/ossec/queue/*
 ```
+
+> 📷 `du -sh .../snapshots/183/fs/var/ossec/queue/*` → 해당 파일 없음(스냅샷 안의 queue는 비어 있음).
 
 스냅샷 183 : 실제 데이터가 없는 레이어, containerd는 overlay 방식이라 실제 데이터가 다른 레이어에 있음
 
@@ -326,20 +351,28 @@ sudo du -sh /var/lib/containerd/* 2>/dev/null | sort -rh | head -10ls 시도
 sudo ls /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/183/fs/var/ossec/queue/
 ```
 
+> 📷 여러 `du`·`ls` 조합으로 queue 크기를 찾으려 했지만 모두 출력 없음.
+
 1. 전체 경로 탐색
 ```bash
 sudo du -sh /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/ 2>/dev/null
 ```
+
+> 📷 스냅샷 183의 /var/ossec 하위 디렉터리 목록(active-response, api, etc, logs, queue, var 등)과 `snapshots/` 전체 7.8G — 30GB의 원인은 여기가 아님.
 
 snapshots는 7.8G뿐이기 때문에 여기에는 30GB 없음.
 ```bash
 sudo du -sh /var/lib/containerd/*
 ```
 
+> 📷 `du -sh /var/lib/containerd/*` → 와일드카드가 일반 사용자 셸에서 확장되지 않아 "그런 파일이나 디렉터리가 없습니다".
+
 Docker가 containerd를 사용하지만 실제 볼륨 데이터는 다른 경로에 있다. 그레서 찾지 못함
 ```bash
 sudo du -sh /var/lib/docker/*
 ```
+
+> 📷 `du -sh /var/lib/docker/*`도 같은 이유로 실패(디렉터리 권한 때문에 sudo 앞에서 glob이 풀리지 않음).
 
 Docker 데이터가 기본 경로에는 없다.
 
@@ -348,18 +381,26 @@ Docker 데이터가 기본 경로에는 없다.
 sudo docker info | grep "Docker Root Dir"
 ```
 
+> 📷 `docker info | grep "Docker Root Dir"` → /var/lib/docker.
+
 하지만 경로가 맞지만 단지 접근이 안될 뿐임을 확인
 ```bash
 sudo ls /var/lib/docker/
 ```
 
+> 📷 `sudo ls /var/lib/docker/`: buildkit, containers, image, network, rootfs, volumes 등.
+
 1. single-node_wazuh-queue 의 볼륨 존재 확인하고 그 안의 내용 확인
 ```bash
 sudo ls /var/lib/docker/volumes/
 ```
+
+> 📷 `sudo ls /var/lib/docker/volumes/`: 실제 볼륨 이름은 `single-node_wazuh_queue`(언더스코어), elk_esdata, wazuh-indexer-data 등 15개.
 ```bash
 sudo ls /var/lib/docker/volumes/single-node_wazuh-queue/_data/
 ```
+
+> 📷 하이픈 이름(`single-node_wazuh-queue`)으로 계속 접근해 "그런 파일이나 디렉터리가 없습니다" — 이름 오타가 원인.
 
 볼륨 목록에는 있는데 실제 디렉토리가 없는 것은 Docker가 containerd 볼륨 플러그인을 쓰기 때문이다.
 
@@ -370,6 +411,8 @@ sudo ls /var/lib/docker/volumes/single-node_wazuh-queue/_data/
 # 안 쓰는 Docker 이미지 강제 삭제
 sudo docker image prune -a -f
 ```
+
+> 📷 `docker image prune -a -f` → 회수 0B(모든 이미지가 사용 중).
 
 모든 이미지가 실행 중인 컨테이너에 연결이되어 있어 삭제가 되지 않음
 
@@ -405,6 +448,8 @@ sudo systemctl start docker
 docker ps
 ```
 
+> 📷 Docker 재시작 후 `docker ps`가 비어 있음 — 컨테이너가 하나도 안 보임.
+
 컨테이너가 하나도 없음 =docker root는 이동이 되었는데 컨테이너들의 안 옮겨짐
 
 확인
@@ -412,6 +457,8 @@ docker ps
 df -h /
 docker info | grep "Docker Root Dir"
 ```
+
+> 📷 Docker 데이터를 /home으로 옮기는 절차: `cp -r /var/lib/docker/* /home/docker-data/`는 glob 문제로 실패, daemon.json에 data-root 변경 후 재시작 → `Docker Root Dir: /home/docker-data`로 바뀌었지만 루트는 여전히 48G/100%, `docker ps`는 빈 목록(새 경로에 데이터가 없음).
 
 - Docker Root Dir: /home/docker-data ✅ 변경 성공
 - / 여전히 100% — cp가 실패해서 기존 데이터가 안 옮겨진 것
@@ -431,10 +478,14 @@ sudo du -sh /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/
 sudo rm -rf /var/lib/docker/volumes/*
 ```
 
+> 📷 containerd 스냅샷 102개·7.8G 확인 후 `sudo rm -rf /var/lib/docker/volumes/*`로 기존 볼륨 삭제(30GB queue 포함) — 데이터 초기화를 감수한 복구.
+
 volumes 삭제
 ```bash
 df -h /
 ```
+
+> 📷 볼륨 삭제 직후에도 `df -h /` → 48G 중 48G, 남은 공간 204K(100%) — 공간이 바로 반환되지 않음.
 
 하지만 아직도 데이터가 삭제가 안됨.
 
@@ -444,6 +495,8 @@ df -h /
 ```bash
 sudo find / -xdev -size +1G -ls 2>/dev/null
 ```
+
+> 📷 `find / -xdev -size +1G -ls` → 1GB 넘는 단일 파일 없음.
 
 하나도 없음
 
@@ -455,12 +508,16 @@ sudo du -sh /home/docker-data/
 
 ```
 
+> 📷 새 data-root `/home/docker-data/`는 152K — 데이터가 옮겨지지 않은 빈 디렉터리.
+
 /home/docker-data는 152K뿐이고, /는 48G 꽉 찼는데 1G 이상 파일도 없음
 
 이건 수많은 작은 파일들이 inode를 꽉 채운 경우
 ```bash
 df -i /
 ```
+
+> 📷 `df -i /` → inode 사용률 76% — inode 고갈은 원인이 아님.
 
 inode는 76%
 
@@ -483,20 +540,28 @@ Docker/containerd가 쓰는 디렉토리를 먼저 본 이유:
 sudo du -sh /var/lib/containerd/
 ```
 
+> 📷 `du -sh /var/lib/containerd/` → 12G.
+
 48G를 다 쓰고 있는데 어디 있는지 전체 탐색
 ```bash
 sudo du -sh /* 2>/dev/null | sort -rh | head -15
 ```
+
+> 📷 `du -sh /*` 상위: /var 42G, /usr 5.3G, /home 479M — /var가 대부분.
 
 /var 임을 확인
 ```bash
 sudo du -sh /var/* 2>/dev/null | sort -rh | head -10
 ```
 
+> 📷 `du -sh /var/*`: /var/lib이 대부분(약 41G), /var/cache 1.5G, /var/log 16M, /var/ossec 19M.
+
 /var/lib 41G, /var/cache 2.5G
 ```bash
 sudo du -sh /var/lib/* 2>/dev/null | sort -rh | head -10
 ```
+
+> 📷 `du -sh /var/lib/*`: **/var/lib/docker 29G**, /var/lib/containerd 12G, mysql 124M — rm 이후에도 docker가 29G를 차지(삭제된 파일을 프로세스가 잡고 있는 상태로 추정).
 ```bash
 /var/lib/docker      29G  ← 아직 여기 있음
 /var/lib/containerd  12G  ← 여기도
@@ -514,10 +579,14 @@ sudo rm -rf /var/lib/docker/*
 sudo rm -rf /var/lib/containerd/io.containerd.snapshotter.v1.overlayfs/snapshots/*
 ```
 
+> 📷 `rm -rf /var/lib/docker/*`와 containerd 스냅샷 삭제 후에도 `df -h`에서 rl-root 48G/100%(20K 남음).
+
 실패
 ```bash
 sudo du -sh /var/lib/* 2>/dev/null | sort -rh | head -5
 ```
+
+> 📷 그런데 `du -sh /var/lib/*`는 여전히 docker 29G, containerd 12G — 실행 중인 dockerd/containerd가 삭제된 파일을 열고 있어 공간이 반환되지 않음.
 
 rm이 실행됐는데도 여전히 29G + 12G가 남아있다.
 
@@ -534,6 +603,8 @@ sudo systemctl stop containerd
 df -h /
 ```
 
+> 📷 `systemctl stop docker.socket`, `stop containerd` (docker.socket이 다시 띄울 수 있다는 경고) 후에도 `df -h /`는 100%.
+
 여전히 100%
 
 du로는 29G 있지만 df 로는 공간이 안 풀리고 있음
@@ -545,16 +616,22 @@ df -h /var/lib/containerd
 
 ```
 
+> 📷 `df -h /var/lib/docker`, `/var/lib/containerd` 둘 다 같은 루트 볼륨(48G/100%).
+
 하지만,
 
 둘 다 같은 / 파티션에 있음
 
 재부팅하면 파일 핸들이 전부 해제되면서 공간이 풀릴 수도 있지만..
 
+> 📷 VM 재부팅 직후 `df -h /` → 여전히 48G, 416K 남음.
+
 리부팅이후에도 여전히 100%
 ```bash
 sudo du -sh /var/lib/* 2>/dev/null | sort -rh | head -5
 ```
+
+> 📷 재부팅 후 `du -sh /var/lib/*`도 docker 29G·containerd 12G — 재부팅 전에 지운 것이 아니라 디렉터리가 그대로 남아 있었음.
 
 rm 명령어가 실제로 삭제를 안했음을 확인 -/var/lib/docker가 여전히 29G
 
@@ -578,6 +655,8 @@ sudo systemctl start docker
 df -h /
 
 ```
+
+> 📷 서비스를 멈춘 상태에서 `/var/lib/docker`·`/var/lib/containerd`를 지우고 빈 디렉터리로 다시 만든 뒤 containerd·docker 시작 → **rl-root 48G 중 7.6G 사용(16%), 41G 확보**.
 ```bash
 / : 48G → 7.6G 사용, 41G 여유 (16%)
 ```
@@ -602,6 +681,8 @@ cd ~/단일노드_디렉토리
 # 기존 Wazuh docker-compose 디렉토리로 이동
 ls ~
 ```
+
+> 📷 `/etc/docker/daemon.json`을 `{}`로 초기화해 data-root 설정을 되돌리고 Docker 재시작. 홈 디렉터리에서 wazuh-docker 작업 폴더 확인(재배포 준비).
 ```bash
 cd ~/wazuh-docker
 ls
@@ -620,6 +701,8 @@ docker compose up -d
 ```bash
 docker ps
 ```
+
+> 📷 Wazuh 재배포 후 `docker ps`: wazuh-dashboard·manager·indexer 4.9.0 세 컨테이너 모두 Up 23 seconds (443→5601, 1514-1515, 514/udp, 55000, 9200).
 
 3개 컨테이너 모두 정상 실행 중
 
@@ -660,6 +743,8 @@ docker exec single-node-wazuh.manager-1 /var/ossec/bin/wazuh-control restart
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/wazuh-control status
 ```
 
+> 📷 `wazuh-control status`: modulesd·monitord·logcollector·remoted·syscheckd·analysisd·execd·db·authd·apid 실행 중(clusterd·maild·agentlessd·integratord·dbd·csyslogd는 기본 비활성).
+
 정상
 
 1. ptables PORTSCAN 룰 복구:
@@ -674,6 +759,8 @@ sudo iptables -I INPUT -p tcp --tcp-flags SYN,ACK,FIN,RST RST \
 sudo iptables -L INPUT --line-numbers | grep PORTSCAN
 ```
 
+> 📷 PORTSCAN iptables LOG 규칙을 다시 넣고 INPUT 1번에 적용된 것을 확인.
+
 PORTSCAN 룰 1번으로 등록
 
 iptables 영구 적용:
@@ -687,6 +774,8 @@ sudo systemctl enable --now iptables
 ```bash
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
 ```
+
+> 📷 재배포 직후 `agent_control -l`: 000 매니저, 001 yhc(Active)만 등록 — Windows 에이전트는 다시 등록해야 함.
 
 Rocky Linux 에이전트(yhc) 1개만 연결
 
@@ -715,11 +804,15 @@ PowerShell 관리자 권한으로:
 Restart-Service WazuhSvc
 ```
 
+> 📷 Windows PowerShell에서 `agent-auth.exe -m 192.168.190.128`: 경로에 공백·(x86)이 있어 `&` 호출 연산자가 필요했고, 실행하니 `ERROR: Duplicate agent name: DESKTOP-… (from manager)` — 매니저에 같은 이름이 남아 있음. 리눅스용 `ip addr` 명령은 PowerShell에서 동작하지 않음.
+
 Windows 에이전트 이름이 manager에 남아있음.
 ```bash
 # Rocky Linux에서 기존 Windows 에이전트 확인
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/manage_agents -l
 ```
+
+> 📷 `systemctl enable --now iptables`로 규칙 영구화. 컨테이너 이름 오타(`wazhu`) 후 다시 실행한 `agent_control -l`은 001만 Active, `manage_agents -l`에는 001 yhc·002 DESKTOP-…가 모두 등록돼 있음(002는 연결 대기).
 
 DESKTOP-5408CBA가 ID 002로 이미 등록
 
@@ -738,7 +831,13 @@ docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
 
 DESKTOP-5408CBA가 Active확인
 
+> 📷 Windows 에이전트 서비스 재시작 후 `agent_control -l`: 002 DESKTOP-… Active.
+
 22-1. agent_control -l , manage_agents -l
+
+> 📷 최종 상태: 000 매니저(Active/Local), 001 yhc(Active), 002 DESKTOP-…(Active).
+
+> 📷 비교용: `agent_control -l`(연결 상태, 001만 Active였던 시점)과 `manage_agents -l`(등록 목록, 001·002)의 차이.
 
 ### 두 리스트의 차이
 
