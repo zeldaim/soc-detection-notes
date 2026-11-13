@@ -14,6 +14,8 @@ Windows VM
   → 매칭되면 알럿 발생
 ```
 
+> 📷 구성도: Windows 10 VM(피해자)에서 악성 행위(Run 키 변조·서비스 등록) → Sysmon이 EventID 12/13 로그 생성 → Wazuh agent가 암호화해 Rocky Linux(관제 서버)로 전송 → 매니저가 /var/ossec/etc/rules/의 local_rules.xml과 매칭 → 알림(alerts.json / Kibana).
+
 ### 프로젝트 수행과
 
 1. 파일 배포
@@ -33,6 +35,8 @@ Sysmon64.exe -c sysmon_persistence.xml
 Sysmon64.exe -c
 # → 출력에서 RegistryEvent / FileCreate include 규칙 확인
 ```
+
+> 📷 `Sysmon64.exe -c sysmon_persistence.xml`로 설정 적용: 스키마 4.90 설정 파일 검증 완료, "Configuration updated".
 
 Sysmon이 Run키 변조 감시 시작
 
@@ -54,6 +58,12 @@ docker exec single-node-wazuh.manager-1 /var/ossec/bin/wazuh-logtest -V
 # sudo systemctl restart wazuh-manager
 docker restart single-node-wazuh.manager-1
 ```
+
+> 📷 작성한 `wazuh_persistence_rules.xml`(6.7kB)을 매니저 컨테이너의 local_rules.xml로 복사.
+
+> 📷 룰 복사 후 매니저 컨테이너 재시작.
+
+> 📷 `wazuh-logtest -V`로 버전 확인: Wazuh v4.9.0 (앞 줄은 잘못 입력한 명령).
 ```text
 전체흐름
 Windows에서 Run 키가 변조되면 → Sysmon이 EventID 13 기록 → Wazuh agent가 Rocky로 전송 → Rocky의 Rule 100201이 "Run 키에 값 쓰기 감지" 조건과 매칭 → 알럿 발생.
@@ -67,14 +77,20 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 tail -f /var/ossec/logs/alerts/alerts.json
 ```
 
+> 📷 alerts.json 실시간 출력: Windows Security 채널 4624 로그온(SYSTEM, logonType 5, services.exe)이 60106 "Windows Logon Success"(level 3, T1078)로 계속 기록됨.
+
 알럿은 확인되었다. 파이프라인 전체가 살아있다는 의미이지만 이 Windows 로그온 이벤트 중에, Run키 알럿을 확인해야함.
 ```powershell
 docker exec single-node-wazuh.manager-1 grep -a "100201\|100200\|SOCLabTest" /var/ossec/logs/alerts/alerts.json | tail -5
 ```
 
+> 📷 alerts.json에서 커스텀 룰 100200·100201과 테스트 값 SOCLabTest 검색 → 결과 없음.
+
 Run키 알럿이 하나도 없음.
 
 Window VM Poweshell에  Run키 등록 확인.
+
+> 📷 Windows에서 HKCU Run 키의 SOCLabTest = `C:\temp\test.exe` 등록 확인.
 
 위의 캡쳐에서C:\temp\test.exe 값이 잘 들어가 있음을 확인함.
 
@@ -82,6 +98,8 @@ Sysmon이 감지 했는지 Window 이벤트 로그에서 확인한다. - Event13
 ```powershell
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 20 | Where-Object {$_.Id -eq 13} | Select-Object TimeCreated, Message | Format-List
 ```
+
+> 📷 Sysmon 로그 조회 결과: EventID 13이 기록되지만 대부분 RuleName **T1543_Service_Registry**, Image lsass.exe, TargetObject `HKLM\System\CurrentControlSet\Services\W32Time\SecureTimeLimits\…`(시간 동기화 서비스의 정상 변경) — 노이즈만 보이고 Run 키 이벤트는 없음.
 
 EventID 13이 잡히고 있고 T1543_Service_Registry 룰네임도 확인됨.
 
@@ -99,6 +117,10 @@ docker exec single-node-wazuh.manager-1 grep -a "SOCLabTest\|100201" /var/ossec/
 Get-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" | Select-Object SOCLabTest
 ```
 
+> 📷 SOCLabTest를 지우고 2초 뒤 다시 생성(`C:\temp\test.exe`)해 이벤트를 새로 발생시킴.
+
+> 📷 alerts.json에서 SOCLabTest·100201 → 결과 없음.
+
 Run키는 등록이 되었다.  하지만 알럿은 잡히고 있지 않음.
 
 Sysmon이 감지는 하는데 Wazuh까지 전달이 안되고 있음.
@@ -107,12 +129,16 @@ Sysmon이 감지는 하는데 Wazuh까지 전달이 안되고 있음.
 type "C:\Program Files (x86)\ossec-agent\ossec.conf" | Select-String -Pattern "Sysmon"
 ```
 
+> 📷 Windows 에이전트 ossec.conf에 `<location>Microsoft-Windows-Sysmon/Operational</location>` 수집 설정 존재.
+
 Sysmon 수집 설정 확인 결과 설정은 존재함.  그러므로 매칭에 문제가 있을 수 있다.
 
 규칙 파일이 컨테이너에 제대로 들어갔는지 확인
 ```bash
 docker exec single-node-wazuh.manager-1 grep -n "100201" /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 local_rules.xml: 100201(level 12)이 40번째 줄에 있고, 147번째 줄에서 다른 룰이 `if_matched_sid 100201`로 참조(상관 분석 룰).
 
 Rule 100201이 40번째 줄에 있음을 확인함.
 
@@ -123,6 +149,8 @@ Wazuh가 Sysmon EventID 13을 어떤 그룹으로 분류하는지 확인.
 docker exec single-node-wazuh.manager-1 grep -r "sysmon_event_13" /var/ossec/ruleset/rules/
 ```
 
+> 📷 `sysmon_event_13` 그룹: 0330·0595에서 group으로 부여되고, 0860-sysmon_id_13.xml에서 if_group으로 3번 사용.
+
 그룹명 매칭 확인함
 
 Sysmon 이벤트가 실제로 Wazuh에 도달하는지 확인.
@@ -131,6 +159,8 @@ Run 키 관련 이벤트가 alerts가 아닌 일반 로그에 있는지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "CurrentVersion.Run" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 "CurrentVersion.Run" → 없음.
 
 alerts.jason이 아예 없음.
 
@@ -141,6 +171,8 @@ archives 로그(알럿 안 된 것도 전부 기록)에서 확인.
 docker exec single-node-wazuh.manager-1 grep -a "CurrentVersion.Run" /var/ossec/logs/archives/archives.json 2>/dev/null | tail -3
 ```
 
+> 📷 archives.json에서도 "CurrentVersion.Run" → 없음(당시 logall 꺼짐 또는 미수신).
+
 archives에도 없음.
 
 이벤트가 Windows에서 Rocky까지 아예 전송이 안 되고 있음.
@@ -150,12 +182,16 @@ Windows agent 서비스 상태확인
 Get-Service -Name "WazuhSvc"
 ```
 
+> 📷 Windows `Get-Service WazuhSvc` → Running.
+
 Runnig임. Agent는 살아있음.
 
 그러면 살아있는 Agent가 실제로 Sysmon로그를 읽고 있는지 확인.
 ```powershell
 type "C:\Program Files (x86)\ossec-agent\ossec.conf" | Select-String -Pattern "Sysmon" -Context 2,2
 ```
+
+> 📷 에이전트 ossec.conf의 Sysmon 블록: location Microsoft-Windows-Sysmon/Operational, `log_format eventchannel` — 수집 설정 정상.
 
 eventchannel 포맷으로 Sysmon/Operational 채널을 수집하고 있음. - Agent 설정은 완벽함.
 
@@ -171,6 +207,10 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 grep -a "SOCLabTest2\|CurrentVersion.Run" /var/ossec/logs/archives/archives.json 2>/dev/null | tail -3
 ```
 
+> 📷 WazuhSvc 재시작, 5초 뒤 HKCU Run에 SOCLabTest2 = `C:\temp\evil.exe` 생성.
+
+> 📷 archives.json에서 SOCLabTest2·CurrentVersion.Run → 없음.
+
 이벤트가 Windows에서 전혀 안넘어오고 있음.
 
 가설1. HKCU (현재 사용자) 키를 PowerShell로 바꾸면 Sysmon이 잡긴 하는데, Wazuh agent가 SYSTEM 권한으로 실행돼서 현재 사용자 세션 이벤트를 못 보는 경우가 있다.
@@ -180,6 +220,8 @@ docker exec single-node-wazuh.manager-1 grep -a "SOCLabTest2\|CurrentVersion.Run
 docker exec single-node-wazuh.manager-1 ls -la /var/ossec/logs/archives/
 
 ```
+
+> 📷 매니저 `/var/ossec/logs/archives/`: archives.json 파일이 아예 없고 archives.log 0바이트 — archives 기록이 꺼진 상태.
 
 archives.json이 없고 archives.log만 있는데 크기가 0이다. → archives로깅이 비활성화되어 있음.
 
@@ -193,12 +235,16 @@ alerts.jason 에도 없다는 것은 이벤트 자체가 안넘어오는 게 맞
 docker exec single-node-wazuh.manager-1 grep -a "archives" /var/ossec/etc/ossec.conf
 ```
 
+> 📷 매니저 ossec.conf에서 "archives" 검색 → 없음.
+
 위 결과를 통해 archives 설정 자체가 없음을 확인함.
 
 이 문제를 해결하기 전에 더 중요한 문제인 alerts.jason 에도 없는 이유를 알아보기 위해 Window agent가 Sysmon 이벤트를 보내고 있는지 agent 로그를 확인.
 ```powershell
 type "C:\Program Files (x86)\ossec-agent\ossec.log" | Select-String -Pattern "Sysmon|EventChannel" | Select-Object -Last 20
 ```
+
+> 📷 Windows 에이전트 ossec.log: 13:42, 14:15, 14:33에 `(1951) Analyzing event log: 'Microsoft-Windows-Sysmon/Operational'` — 에이전트는 Sysmon 채널을 읽고 있음.
 
 agent가 Sysmon 채널을 읽고 있음. - Analyzing event log: 'Microsoft-Windows-Sysmon/Operational' 확인함.
 
@@ -226,6 +272,8 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 
 결과
 
+> 📷 에이전트 ossec.log 실시간 확인: 13:41~14:15에 `Unable to connect to [192.168.190.128]:1514/tcp`(연결 거부·강제 종료), `(1137) Lost connection with manager`, `(1208) Unable to connect to enrollment service :1515`, `Process locked due to agent is offline` 반복 — 매니저 재시작 동안 에이전트가 끊겼다가 14:15 이후 다시 Sysmon 분석 시작.
+
 핵심 에러 발견
 ```powershell
 Unable to connect to '[192.168.190.128]:1514/tcp': 대상 컴퓨터에서 연결을 거부했으므로 연결하지 못했습니다.
@@ -240,6 +288,8 @@ Windows agent가 Rocky(192.168.190.128)의 1514 포트에 연결을 못하고 �
 docker ps --format "table {{.Names}}\t{{.Ports}}" | grep manager
 ```
 
+> 📷 `docker ps`: 매니저 컨테이너가 1514-1515/tcp, 514/udp, 55000/tcp를 호스트에 정상 공개.
+
 1514는 열려있음.
 
 Docker 컨테이너는 정상.
@@ -253,10 +303,14 @@ Rocky의 방화벽이 막고 있나?
 sudo firewall-cmd --list-ports
 ```
 
+> 📷 `firewall-cmd --list-ports` → FirewallD is not running — 호스트 방화벽은 원인이 아님.
+
 네트워크 연결 자체에 이상이 있는지 확인
 ```bash
 ss -tlnp | grep 1514
 ```
+
+> 📷 `ss -tlnp | grep 1514` → 0.0.0.0:1514, [::]:1514 LISTEN.
 
 1514 포트 LISTEN 상태 확인
 
@@ -267,12 +321,16 @@ Rocky쪽은 정상.
 Test-NetConnection -ComputerName 192.168.190.128 -Port 1514
 ```
 
+> 📷 Windows `Test-NetConnection 192.168.190.128 -Port 1514` → TcpTestSucceeded True(출발지 192.168.190.131).
+
 TcpTestSucceeded: True.
 
 가설4. Agent에서 확인한 에러로그가 재시작시 잠깐 연결이 끊겼던 기록인지 확인
 ```powershell
 Get-Content "C:\Program Files (x86)\ossec-agent\ossec.log" -Tail 5
 ```
+
+> 📷 에이전트 ossec.log 최근: FIM 스캔 종료·실시간 FIM 시작, SCA(cis_win10_enterprise) 평가 완료(28초) — 에이전트 정상 동작.
 
 agent 정상 동작
 
@@ -282,6 +340,8 @@ Windows 이벤트가 전혀 넘어가지 앟는 이유를 알기 위해 Rocky에
 ```powershell
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
 ```
+
+> 📷 `agent_control -l`: 001 localhost, 002 yhc, 003 DESKTOP-… 모두 Active.
 
 DESKTOP-5408CBA — Active
 
@@ -296,12 +356,16 @@ docker exec single-node-wazuh.manager-1 grep -a "DESKTOP-5408CBA" /var/ossec/log
 
 ```
 
+> 📷 alerts.json의 DESKTOP-… 이벤트: Security 4624 로그온(60106), System 7040 "Background Intelligent Transfer Service 시작 유형 변경"(61104, level 3) 등 Windows 기본 채널 알림만 있음.
+
 Windows 이벤트는 잘 들어오고 있고 Security 채널, System 채널 이벤트 다 집히는데 Sysmon채널말 확인 안됨.
 
 의문점: Sysmon 채널 이벤트가 전혀 안 오는 건지 확인:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "Sysmon" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json의 Sysmon 알림 예: 에이전트 SCA가 실행한 SecEdit.exe(EventID 1)와 **92200 \"Scripting file created under Windows Temp or User folder\"(level 6, T1059/T1105)** — Sysmon EventID 11, RuleName T1547_Startup_Folder_LNK, 대상 `…\Start Menu\Programs\Windows PowerShell\Windows PowerShell.lnk`. Sysmon 채널 이벤트 일부는 알림이 됨.
 
 Sysmon 이벤트는 들어오고 있음을 확인.
 
@@ -321,12 +385,18 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 grep -a "100201\|SOCLabTest4\|CurrentVersion.Run" /var/ossec/logs/alerts/alerts.json | tail -5
 ```
 
+> 📷 SOCLabTest4 = `C:\temp\evil.exe`를 HKCU Run 키에 생성.
+
+> 📷 alerts.json에서 100201·SOCLabTest4·CurrentVersion.Run → 없음.
+
 Run키가 등록이 되었지만 아직 알럿이 없음.
 
 Sysmon 이벤트가 들어온 것 = Event11(파일생성) 이었기 때문에 EvnetdID13 레지스트리 값 쓰기가 실제로 Wazuh에 들어오는지 확인
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "eventID.*13\|sysmon_event_13" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json의 Sysmon EventID 1 알림: `net1 user guest` 실행(Account Discovery), SecEdit.exe가 비정상 위치에서 powershell로 실행됨(92066, level 4, T1059.001) — 둘 다 에이전트 SCA 점검 동작이 만든 이벤트.
 
 Sysmon EventID 1 (프로세스 생성)은 들어오는데 EventID 13은 없음.
 
@@ -336,6 +406,8 @@ Sysmon EventID 1 (프로세스 생성)은 들어오는데 EventID 13은 없음.
 ```bash
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 100 | Where-Object {$_.Id -eq 13} | Select-Object -First 1 TimeCreated, Message | Format-List
 ```
+
+> 📷 Sysmon EventID 13 최근 1건: RuleName T1543_Service_Registry, lsass.exe의 W32Time SecureTimeLimits 값 변경(정상 노이즈).
 
 T1543_Service_Registry 룰네임으로 EventID 13이 Windows에는 존재.
 
@@ -353,6 +425,8 @@ PowerShell로 Run 키를 바꿀 때 어떤 프로세스가 실제 변경하는�
 Get-WinEvent -LogName "Microsoft-Windows-Sysmon/Operational" -MaxEvents 200 | Where-Object {$_.Id -eq 13 -and $_.Message -like "*CurrentVersion*Run*"} | Select-Object -First 3 TimeCreated, Message | Format-List
 
 ```
+
+> 📷 Message에 CurrentVersion\Run이 들어간 EventID 13만 필터: **14:52:00 RuleName T1547_Run_Key_Create, SetValue, Image powershell.exe, TargetObject HKU\<SID>\…\CurrentVersion\Run\SOCLabTest4, Details C:	emp\evil.exe** — Sysmon은 정확히 잡았음.
 ```powershell
 RuleName: T1547_Run_Key_Create
 TargetObject: HKU\S-1-5-21-...\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\SOCLabTest4
@@ -373,10 +447,14 @@ grep -n "pcre2" /var/ossec/etc/rules/local_rules.xml | head -10
 
 ```
 
+> 📷 local_rules.xml의 pcre2 필드 목록: targetObject(29·42·55·68·126줄), targetFilename(84), win.system.message(113), image(129, negate=yes).
+
 29번째 줄과 42번째 줄 내용 확인 - 이곳에 Rule 100200, 100201이 있음.
 ```bash
 sed -n '28,45p' /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 local_rules.xml 28~45줄: 100200(if_group sysmon_event_12, targetObject `(?i)\SOFTWARE\(WOW6432Node\)?Microsoft\Windows\CurrentVersion\Run`, \"Autorun registry key created or deleted\")와 100201(if_group sysmon_event_13, 같은 경로 + RunOnce?, \"Value written to Run/RunOnce key\", level 12).
 
 정규식이 :
 ```bash
@@ -400,6 +478,8 @@ sed -i 's|(?i)\\\\SOFTWARE\\\\(WOW6432Node\\\\)?Microsoft\\\\Windows\\\\CurrentV
 ```bash
 grep -A2 "100201" /var/ossec/etc/rules/local_rules.xml | head -5
 ```
+
+> 📷 sed로 두 정규식 앞에 `.*`를 붙여 `HKU\<SID>\SOFTWARE…`처럼 앞부분이 있는 경로도 매칭되게 수정, grep으로 반영 확인.
 
 sed 적용 실패
 
@@ -427,6 +507,10 @@ done 확인
 grep -A3 "100201" /var/ossec/etc/rules/local_rules.xml | head -6
 ```
 
+> 📷 컨테이너에 vi가 없어(`vi: command not found`) python3 한 줄 스크립트로 local_rules.xml의 정규식을 `(?i).*SOFTWARE.*(WOW6432Node.*)?Microsoft.*Windows.*CurrentVersion.*Run(Once)?` 형태로 치환.
+
+> 📷 치환 후 100201의 targetObject 정규식이 `(?i).*\SOFTWARE\(WOW6432Node\)?Microsoft\Windows\CurrentVersion\RunOnce?`로 바뀐 것 확인.
+
 정규식 변경 확인
 ```bash
 (?i).*\\SOFTWARE\\(WOW6432Node\\)?Microsoft\\Windows\\CurrentVersion\\RunOnce?
@@ -444,12 +528,18 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 docker exec single-node-wazuh.manager-1 grep -a "100201\|SOCLabTest5" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
 
+> 📷 SOCLabTest5 = C:	emp\evil.exe를 HKCU Run 키에 생성.
+
+> 📷 alerts.json에서 100201·SOCLabTest5 → 없음.
+
 실패
 
 EventID 13이 실제로 Wazuh에 들어오는지 확인
 ```powershell
 docker exec single-node-wazuh.manager-1 grep -a "sysmon_event_13\|eventID.*13" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 alerts.json에서 sysmon_event_13/eventID 13 관련 검색: SecEdit.exe(EventID 1)와 60106 로그온 알림만 보이고 EventID 13 알림은 없음.
 
 Sysmon EventID 1은 들어오는데 EventID 13이 없음
 
@@ -459,6 +549,8 @@ Wazuh manager 설정에서 EventID 13을 명시적으로 수집하는지 확인
 ```powershell
 docker exec single-node-wazuh.manager-1 grep -a "13\|registry\|sysmon" /var/ossec/etc/ossec.conf | head -20
 ```
+
+> 📷 매니저 ossec.conf에서 13/registry/sysmon 검색 → `queue_size 131072` 한 줄뿐(관련 설정 없음).
 
 manager 설정에 Sysmon 관련 내용이 없지만 EventID13 수집은 Windows agent 설정에서 하는 것이기 때문에 상관이 없다.
 
@@ -471,10 +563,14 @@ Wazuh가 EventID 13을 받긴 하는데 우리 규칙 레벨 미만으로 처리
 docker exec single-node-wazuh.manager-1 grep -n "sysmon_event_13\|event_13" /var/ossec/ruleset/rules/0330-sysmon_rules.xml | head -10
 ```
 
+> 📷 0330-sysmon_rules.xml 98줄에 `group sysmon_event_13`.
+
 98번 줄에 있음 - 규칙 전체 확인
 ```powershell
 docker exec single-node-wazuh.manager-1 sed -n '90,105p' /var/ossec/ruleset/rules/0330-sysmon_rules.xml
 ```
+
+> 📷 0330의 185011(if_sid 18101, `match Microsoft-Windows-Sysmon/Operational: INFORMATION(13)`)·185012(Event 14) — 구형 텍스트 이벤트 로그 형식을 전제로 한 룰.
 
 분제 발견
 ```powershell
@@ -496,6 +592,8 @@ open('/var/ossec/etc/rules/local_rules.xml', 'w').write(content)
 print('done')
 "
 ```
+
+> 📷 python으로 local_rules.xml의 `if_group sysmon_event_13`을 `if_sid 185011`로 치환("done").
 ```bash
 docker restart single-node-wazuh.manager-1
 ```
@@ -505,6 +603,8 @@ New-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" -Na
 ```bash
 sleep 30 && docker exec single-node-wazuh.manager-1 grep -a "100201\|SOCLabTest6" /var/ossec/logs/alerts/alerts.json | tail -3
 ```
+
+> 📷 SOCLabTest6 = C:	emp\evil.exe를 HKCU Run 키에 생성.
 
 if_sid 방식 실패
 
