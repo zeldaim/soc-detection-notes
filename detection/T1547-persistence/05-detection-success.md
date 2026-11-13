@@ -2,6 +2,11 @@
 
 > 원본: 개인 학습 노트(Notion)에서 옮겨 정리. 스크린샷은 📷 표시로 화면 내용을 글로 옮겼습니다.
 
+> 📷 직접 올린 Wazuh 공식 이슈 #35707 "Sysmon EventID 13 arrives in archives.json but no alert generated (Wazuh 4.9.0 Docker)": 환경(매니저 4.9.0 Docker, Windows 10 에이전트 4.9.2, Sysmon v15.20), archives.json 수신·decoder windows_eventchannel·Security 채널 60106 정상 확인, 60000→60004→61600→92300 체인 미발동, 시도한 우회(category 제거, 레벨 덮어쓰기, decoded_as·if_sid 60004 독립 룰) 모두 실패를 정리.
+
+> 📷 우회책으로 쓴 FIM(syscheck) 결과: alerts.json에 **752 "Registry Value Entry Added to the System" (T1112)** — `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\FIMTest2` 추가, **751 "Registry Value Entry Deleted"** — FIMTest 삭제. 에이전트 003(Windows, 192.168.190.131), mode scheduled.
+
+> 📷 같은 FIM 알림 원문(Run 키 값 추가·삭제, md5/sha1/sha256 해시와 syscheck_registry_value_added/deleted 디코더) — Run 키 변경이 FIM으로 잡히는 것을 확인.
 ```bash
 docker exec single-node-wazuh.manager-1 cat /var/ossec/ruleset/rules/0860-sysmon_id_13.xml
 ```
@@ -137,6 +142,8 @@ localhost terraform-soc]$ docker exec single-node-wazuh.manager-1 cat /var/ossec
 ```bash
 docker exec single-node-wazuh.manager-1 cat /var/ossec/etc/rules/local_rules.xml
 ```
+
+> 📷 Sysmon 기반 커스텀 룰 100221(level 12): `decoded_as windows_eventchannel`, `win.system.eventID ^13$`, `win.eventdata.targetObject (?i)CurrentVersion.Run`, T1547.001, group persistence/registry/autorun.
 ```bash
 <rule id="92300" level="3">
   <if_sid>61600</if_sid>
@@ -165,6 +172,8 @@ archives에서 실제 필드명 재확인:
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday" /var/ossec/logs/archives/archives.json | tail -1 | python3 -m json.tool 2>/dev/null | grep -E '"image|"targetObject|"eventID'
 ```
 
+> 📷 archives.json에서 테스트 값 "EvilToday"를 찾아 image/targetObject/eventID를 뽑으려 했지만 결과 없음.
+
 rchives에 EvilToday 이벤트 자체가 없다. 그러므로 파이프라인의 앞단에서 문제가 발생함.
 
 확인
@@ -174,17 +183,27 @@ rchives에 EvilToday 이벤트 자체가 없다. 그러므로 파이프라인의
 docker exec single-node-wazuh.manager-1 ls -la /var/ossec/logs/archives/archives.json
 ```
 
+> 📷 archives.json 크기 3,872,392바이트, 마지막 수정 04:17 — 파일은 계속 쌓이고 있음.
+
 2.logall_json이 실제로 활성화됐는지:
 ```bash
 docker exec single-node-wazuh.manager-1 grep -A1 "logall" /var/ossec/etc/ossec.conf
 ```
+
+> 📷 매니저 ossec.conf: `logall yes`, `logall_json yes` — 모든 이벤트를 archives에 기록하는 설정은 켜져 있음.
 
 3. agent 003 (Windows)이 현재 연결 상태인지:
 ```bash
 docker exec single-node-wazuh.manager-1 /var/ossec/bin/agent_control -l
 ```
 
+> 📷 `agent_control -l`: 001 localhost(Active), 002 yhc(Disconnected), 003 DESKTOP-…(Windows, Active).
+
 정상 상태 확인
+
+> 📷 Windows PowerShell에서 테스트용 Run 키 생성: `New-ItemProperty -Path HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run -Name EvilToday5 -Value calc.exe` (기존 값은 먼저 삭제).
+
+> 📷 alerts.json에서 EvilToday5 검색 → 결과 없음(`json.tool`이 빈 입력으로 "Expecting value" 오류) — 알림이 생성되지 않음.
 
 alerts에 없음.
 
@@ -193,12 +212,16 @@ archives 먼저 확인 - 이벤트가 manager까지 도달했는지 체크
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday5" /var/ossec/logs/archives/archives.json | wc -l
 ```
 
+> 📷 archives.json에서는 EvilToday5가 1건 존재 — 이벤트는 매니저까지 도착.
+
 archives에 존재 확인
 
 룰 매칭 문제일 가능성이 있기 때무에 실제 필드명 확인하자.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday5" /var/ossec/logs/archives/archives.json | python3 -m json.tool | grep -E '"image|"targetObject|"eventID'
 ```
+
+> 📷 archives.json 원문: provider Microsoft-Windows-Sysmon, **eventID 13**, RuleName T1547_Run_Key_Create, EventType SetValue, Image `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`, TargetObject `HKU\<SID>\SOFTWARE\Microsoft\Windows\CurrentVersion\Run\EvilToday5`, Details calc.exe, severityValue INFORMATION.
 
 필드명 확인
 
@@ -289,6 +312,8 @@ logtest는 windows_eventchannel decoder를 타지 않아서 Phase 3가 안 나�
 docker exec single-node-wazuh.manager-1 grep -a '"id":"92300"' /var/ossec/logs/alerts/alerts.json | wc -l
 ```
 
+> 📷 alerts.json에서 Sysmon 체인의 끝 룰 92300 검색 → 0건.
+
 92300이 한 번도 발동 안 했지만, Phase 2에서 필드명은 맞아.
 
 문제는 61600이 발동 안 하는 것이다. 92300은 if_sid>61600에 의존하는데, 61600이 level 0이라 alerts에 안 찍히지만 발동은 해야한다.
@@ -298,10 +323,14 @@ docker exec single-node-wazuh.manager-1 grep -a '"id":"92300"' /var/ossec/logs/a
 docker exec single-node-wazuh.manager-1 grep -rn '"61600"\|id="61600"' /var/ossec/ruleset/rules/
 ```
 
+> 📷 `grep -rn 61600 /var/ossec/ruleset/rules/` → `0595-win-sysmon_rules.xml` 15번째 줄 `<rule id="61600" level="0">`.
+
 매칭조건 확인
 ```bash
 docker exec single-node-wazuh.manager-1 sed -n '15,25p' /var/ossec/ruleset/rules/0595-win-sysmon_rules.xml
 ```
+
+> 📷 0595-win-sysmon_rules.xml 15~25줄: 61600(if_sid 60004, `win.system.severityValue` = `^INFORMATION$`, "Windows Sysmon informational event"), 61601(같은 부모, `^WARNING$`) — Sysmon 이벤트는 severityValue 필드 값으로 분기됨.
 ```bash
 <rule id="61600" level="0">
   <if_sid>60004</if_sid>
@@ -325,24 +354,40 @@ docker restart single-node-wazuh.manager-1
 
 ```
 
+> 📷 룰 파일을 `docker cp`로 꺼내 `sed -i 's/^INFORMATIONS$/^INFORMATION$/'`(정규식 이스케이프 포함)로 `^INFORMATIONS$`를 `^INFORMATION$`으로 바꾸려는 수정을 적용하고, 다시 컨테이너에 복사해 소유자 wazuh:wazuh·권한 660 설정 후 매니저 재시작(17.1kB 복사 성공).
+
+> 📷 매니저 재시작 후 `wazuh-control status`: analysisd·remoted·logcollector 등 핵심 데몬 정상 실행.
+
 analysisd running
 
 EvilToday6으로 테스트
+
+> 📷 새 테스트 값 EvilToday6(calc.exe)을 HKCU Run 키에 생성.
 ```bash
 docker exec single-node-wazuh.manager-1 grep -a "EvilToday6" /var/ossec/logs/alerts/alerts.json
 ```
+
+> 📷 alerts.json에서 EvilToday6 → 결과 없음.
+
+> 📷 alerts.json 0건, archives.json 1건 — 수정 후에도 이벤트는 도착하지만 알림은 생성되지 않음.
 
 archives에는 있는데 이벤트에 도달하지 못함.
 
 룰 매칭 실패
 
+> 📷 컨테이너 안 0595-win-sysmon_rules.xml의 severityValue 조건은 `^INFORMATION$` — 룰 매칭 실패는 철자 문제가 아니었음.
+
 sed 수정 실패
+
+> 📷 호스트로 복사한 파일에도 `^INFORMATION$` — sed로 바꿀 대상(INFORMATIONS)이 애초에 없어서 "수정"이 아무것도 바꾸지 않음.
 
 호스트 파일은 ^INFORMATION$로 정상 수정됐지만 컨테이너 안은 여전히 ^INFORMATIONS$ .
 
 docker cp가 실패했거나 재시작 시 volume이 덮어썼기 때문이다. 이미 4장에서 발생한 오
 
 마운트 경로 확인:
+
+> 📷 `docker inspect ... .Mounts | grep rules` → 출력 없음: ruleset/rules 디렉터리는 볼륨으로 마운트되지 않아 컨테이너 재생성 시 수정 내용이 사라짐.
 
 Rules 디렉토리는 볼륨 마운트 없다.  docker cp가 제대로 안 들어간 것 같음.
 ```bash
@@ -354,6 +399,8 @@ docker exec single-node-wazuh.manager-1 chmod 660 /var/ossec/ruleset/rules/0595-
 docker exec single-node-wazuh.manager-1 grep "INFORMATION" /var/ossec/ruleset/rules/0595-win-sysmon_rules.xml
 ```
 
+> 📷 룰 디렉터리가 마운트되지 않은 것을 확인한 뒤 수정본을 `docker cp`로 다시 넣고 소유자·권한 설정, 반영 여부를 grep으로 확인(`^INFORMATION$`).
+
 정상 반영됨
 ```bash
 docker restart single-node-wazuh.manager-1
@@ -361,13 +408,23 @@ sleep 40
 docker exec single-node-wazuh.manager-1 grep "INFORMATION" /var/ossec/ruleset/rules/0595-win-sysmon_rules.xml
 ```
 
+> 📷 `docker restart` 후 40초 대기, 재시작 뒤에도 파일 내용이 유지되는 것 확인.
+
 재시작 후 파일 수정 유지확인
 
 테스트
 
+> 📷 테스트 값 EvilToday7(calc.exe)을 HKCU Run 키에 생성.
+
+> 📷 alerts.json에서 EvilToday7 → 결과 없음.
+
+> 📷 alerts.json 0건 / archives.json 1건 — 여전히 이벤트는 도착하고 알림은 없음.
+
 INFORMATIONS 버그가 원인이 맞는데 수정이 제대로 안 됨
 
 60004가 61600의 부모인데, 60004 조건도 확인
+
+> 📷 부모 룰 60004(0575-win-base_rules.xml): if_sid 60000, `win.system.channel` = `^Microsoft-Windows-Sysmon/Operational$`, "Group of Windows rules for the sysmon channel".
 
 60004는 정상. win.system.channel이 ^Microsoft-Windows-Sysmon/Operational$ 매칭
 
@@ -375,6 +432,8 @@ INFORMATIONS 버그가 원인이 맞는데 수정이 제대로 안 됨
 ```bash
 docker exec single-node-wazuh.manager-1 grep -A5 'id="60000"' /var/ossec/ruleset/rules/0575-win-base_rules.xml
 ```
+
+> 📷 60004와 그 부모 60000 비교: 60000은 `category ossec`, `decoded_as windows_eventchannel`, `win.system.providerName \.+` 조건 — Sysmon 이벤트는 60000→60004→61600 체인을 타야 하는데 61600에서 끊기는 구조.
 ```bash
 60000: decoded_as=windows_eventchannel + providerName=".+"
 → 60004: channel=Microsoft-Windows-Sysmon/Operational
