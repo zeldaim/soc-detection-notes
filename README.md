@@ -37,6 +37,16 @@ Wazuh SIEM 기반 홈 SOC 랩에서 직접 구현한 **탐지 룰**과 운영 �
 
 - [KISA 윈도우 보안 점검 스크립트 정리](hardening/kisa-windows-check-script.md)
 
+## 수업 노트 (notes/)
+
+교육 과정에서 듣고 실습한 내용을 정리한 노트입니다. 강의 슬라이드는 제 말로 요약했습니다.
+
+| 분야 | 문서 |
+|---|---|
+| 네트워크 보안 | [OPNSense PF·NAT](notes/network-security/opnsense-pf.md) · [방화벽·WAF 실습](notes/network-security/firewall-waf.md) · [스노트 IDS/IPS 룰](notes/network-security/snort-ips-rules.md) · [ZED 패킷 분석](notes/network-security/zed-packet-analysis.md) |
+| BAS | [CALDERA 에이전트·어빌리티](notes/bas/caldera.md) |
+| Security Gym | [위협 이벤트 분석](notes/security-gym/threat-events.md) |
+
 ## 배운 점
 
 - 룰을 고치기 전에 **현재 상태를 먼저 측정**한다 (`wazuh-logtest`, `archives.json`, 실제 적용된 `local_rules.xml` 확인).
