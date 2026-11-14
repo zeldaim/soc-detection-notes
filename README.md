@@ -47,6 +47,7 @@ Wazuh SIEM 기반 홈 SOC 랩에서 직접 구현한 **탐지 룰**과 운영 �
 | BAS | [CALDERA 에이전트·어빌리티](notes/bas/caldera.md) |
 | MITRE ATT&CK | [T1218.005 Mshta 프록시 실행·탐지](notes/mitre-attack/t1218-005-mshta.md) |
 | 악성코드 | [C2·지속성·은닉](notes/malware/c2-persistence-evasion.md) |
+| 하드닝 | [윈도우 계정 관리·디펜더·방화벽 점검(KISA)](notes/hardening/windows-account-defender-hardening.md) |
 | Security Gym | [위협 이벤트 분석](notes/security-gym/threat-events.md) |
 
 ## 배운 점
