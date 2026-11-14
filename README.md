@@ -45,7 +45,7 @@ Wazuh SIEM 기반 홈 SOC 랩에서 직접 구현한 **탐지 룰**과 운영 �
 |---|---|
 | 네트워크 보안 | [OPNSense PF·NAT](notes/network-security/opnsense-pf.md) · [방화벽·WAF 실습](notes/network-security/firewall-waf.md) · [스노트 IDS/IPS 룰](notes/network-security/snort-ips-rules.md) · [ZED 패킷 분석](notes/network-security/zed-packet-analysis.md) · [스노트 content·PCRE·브라우저 익스플로잇 탐지](notes/network-security/snort-rules-keta-basic.md) |
 | BAS | [CALDERA 에이전트·어빌리티](notes/bas/caldera.md) |
-| MITRE ATT&CK | [T1218.005 Mshta 프록시 실행·탐지](notes/mitre-attack/t1218-005-mshta.md) |
+| MITRE ATT&CK | [TTP 기반 탐지·Evaluations·D3FEND·APT3 에뮬레이션](notes/mitre-attack/attack-framework-ttp-detection.md) · [T1218.005 Mshta 프록시 실행·탐지](notes/mitre-attack/t1218-005-mshta.md) |
 | 악성코드 | [C2·지속성·은닉](notes/malware/c2-persistence-evasion.md) |
 | 하드닝 | [윈도우 계정 관리·디펜더·방화벽 점검(KISA)](notes/hardening/windows-account-defender-hardening.md) |
 | XDR | [Wazuh 설정·윈도우 이벤트 로그·HWP 악성코드 침투 분석](notes/xdr/xdr-edr-wazuh-practice.md) |
