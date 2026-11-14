@@ -49,7 +49,7 @@ Wazuh SIEM 기반 홈 SOC 랩에서 직접 구현한 **탐지 룰**과 운영 �
 | 악성코드 | [C2·지속성·은닉](notes/malware/c2-persistence-evasion.md) |
 | 하드닝 | [윈도우 계정 관리·디펜더·방화벽 점검(KISA)](notes/hardening/windows-account-defender-hardening.md) |
 | XDR | [Wazuh 설정·윈도우 이벤트 로그·HWP 악성코드 침투 분석](notes/xdr/xdr-edr-wazuh-practice.md) |
-| Security Gym | [위협 이벤트 분석](notes/security-gym/threat-events.md) |
+| Security Gym | [로그 분석·Wazuh 디코더·커스텀 룰](notes/security-gym/log-analysis-wazuh-rules.md) · [위협 이벤트 분석](notes/security-gym/threat-events.md) |
 
 ## 배운 점
 
